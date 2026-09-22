@@ -174,6 +174,24 @@ le.stop_server()
 assert le.status()["phase"] == "stopped"
 print("OK F 服务幂等与停止")
 
+# --- G. 模型切换 + 性能预估元数据 (切换前后对比功能的数据源) ---
+st = le.ui_status({"mode": "local"})
+m4 = next(m for m in st["models"] if m["name"] == "Qwen3-VL-4B-Instruct-4bit")
+for f in ("infer_ram_gb", "sec_per_img", "f1_est", "json_first_pass", "desc", "ram_ok"):
+    assert f in m4, f"ui_status 缺少对比字段 {f}"
+assert 0 < m4["f1_est"] < 1 and m4["sec_per_img"] > 0 and m4["infer_ram_gb"] > 0
+m30 = next(m for m in st["models"] if "30B" in m["name"])
+assert m30["f1_est"] > m4["f1_est"] and m30["infer_ram_gb"] > m4["infer_ram_gb"], "大档应质量更高、内存更大"
+r = pc.switch_local_model("Qwen3-VL-8B-Instruct-4bit")
+assert r["ok"] and pc.get_setting("local_model") == "Qwen3-VL-8B-Instruct-4bit"
+assert le.status()["phase"] == "stopped", "切换后旧服务应停止释放内存"
+try:
+    pc.switch_local_model("no-such-model")
+    raise AssertionError("未知模型应被拒绝")
+except ValueError as e:
+    assert "未知模型" in str(e)
+print("OK G 模型切换: 设置落盘 + 停旧服务 + 未知模型拦截 + 对比元数据下发")
+
 pc._conn.close()
 le.stop_server()
 shutil.rmtree(tmp, ignore_errors=True)

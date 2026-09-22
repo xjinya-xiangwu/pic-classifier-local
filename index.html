@@ -49,6 +49,18 @@
   .failLink { color: #b3261e; text-decoration: underline; cursor: pointer; }
   #apiStatus.ok { color: #0a9e4a; }
   #apiStatus.err { color: #b3261e; }
+  /* 模型切换性能对比 */
+  .cmpbox { border: 1px solid #e5e5ea; border-radius: 8px; padding: 10px 12px; margin: 2px 0 10px 138px; }
+  .cmp { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12px; }
+  .cmp th { text-align: left; color: #666; font-weight: 600; padding: 2px 4px; }
+  .cmp td { padding: 3px 4px; vertical-align: middle; }
+  .cmp td.lbl { color: #555; width: 108px; }
+  .cmp td.d { width: 62px; white-space: nowrap; }
+  .cbar { display: inline-block; width: 56px; height: 6px; background: #eef0f3; border-radius: 3px; margin-right: 6px; vertical-align: middle; overflow: hidden; }
+  .cbar i { display: block; height: 100%; border-radius: 3px; }
+  .cmp .good { color: #0a9e4a; }
+  .cmp .bad { color: #e08a00; }
+  .cmp .warn { color: #b3261e; }
   #toastWrap { position: fixed; right: 16px; bottom: 70px; z-index: 99; display: flex; flex-direction: column; gap: 8px; }
   .toast { background: #323232; color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 13px; max-width: 420px; white-space: pre-wrap; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
   .toast.err { background: #b3261e; }
@@ -102,7 +114,8 @@
       <option value="api">云端 API (需网络)</option>
     </select></div>
   <div id="localSection">
-    <div class="row"><label>本地模型</label><select id="s_local_model"></select></div>
+    <div class="row"><label>本地模型</label><select id="s_local_model" onchange="renderModelCompare()"></select></div>
+    <div id="modelCompare"></div>
     <div class="row"><label>下载源</label>
       <select id="s_hf_endpoint">
         <option value="https://hf-mirror.com">国内镜像 hf-mirror (默认)</option>
@@ -235,6 +248,7 @@ function render() {
     const dl = D.local.download;
     $("dlBarWrap").style.display = (dl && dl.name) ? "block" : "none";
     if (dl && dl.name) $("dlBar").style.width = (dl.pct || 0) + "%";
+    if ($("settingsDlg").style.display === "block") renderModelCompare();  // 弹窗打开时保持对比数据最新
   }
   const ready = p && p.tagged > 0 && D.groups && D.groups.length;
   $("renameBtn").disabled = !ready;  // 没有已识别照片时禁止重命名, 防止误点报错
@@ -285,9 +299,97 @@ function fillLocalSelect() {
   const sel = $("s_local_model");
   const cur = sel.value;  // poll 期间保留用户已选
   sel.innerHTML = L.models.map(m =>
-    `<option value="${m.name}">${m.name} · ${m.size_gb}GB${m.installed ? " · 已安装" : ""}</option>`).join("");
+    `<option value="${m.name}">${m.name} · ${m.size_gb}GB${m.installed ? " · 已安装" : ""}${m.ram_ok ? "" : " · 内存不足"}</option>`).join("");
   sel.value = (D.settings && D.settings.local_model) || L.recommended || cur;
   if (![...sel.options].some(o => o.value === sel.value)) sel.value = L.models[0].name;
+  renderModelCompare();
+}
+
+// ---- 模型切换性能对比: 直观展示切换前后的耗时/质量/内存/磁盘预估 (PRD v2 §6.3 预算口径) ----
+function shortName(n) { return (n || "").split("-Instruct")[0]; }
+function fmtDur(sec) {
+  if (sec >= 5400) return "~" + (sec / 3600).toFixed(1) + " 小时";
+  if (sec >= 90) return "~" + Math.round(sec / 60) + " 分钟";
+  return "~" + Math.round(sec) + " 秒";
+}
+function cbar(pct, color) {
+  return '<span class="cbar"><i style="width:' + Math.max(3, Math.round(pct)) + '%;background:' + color + '"></i></span>';
+}
+function delta(a, b, lowerBetter) {
+  if (!(a > 0) || !(b > 0) || a === b) return "";
+  const good = (b < a) === lowerBetter;
+  const pct = Math.round(Math.abs(b - a) / a * 100);
+  return ` <span class="${good ? "good" : "bad"}">${b > a ? "+" : "-"}${pct}%</span>`;
+}
+function cmpMemCell(m, L) {
+  if (!m) return "—";
+  let t = "~" + m.infer_ram_gb + "GB";
+  if (L.ram_gb) {
+    const occ = m.infer_ram_gb / L.ram_gb;
+    t += cbar(Math.min(100, occ / 0.75 * 100), occ > 0.75 ? "#d23b3b" : "#8ab0ff") + Math.round(occ * 100) + "% 本机";
+  }
+  return t;
+}
+function renderModelCompare() {
+  const box = $("modelCompare"), L = D && D.local;
+  if (!box) return;
+  if (!L || !L.models || $("localSection").style.display === "none") { box.innerHTML = ""; return; }
+  const newM = L.models.find(m => m.name === $("s_local_model").value);
+  if (!newM) { box.innerHTML = ""; return; }
+  const curName = (D.settings && D.settings.local_model) || "";
+  const curM = L.models.find(m => m.name === curName) || null;
+  const isSwitch = !!(curM && curM.name !== newM.name);
+  const p = D.project;
+  const remain = p ? Math.max(0, (p.total || 0) - (p.tagged || 0)) : 1000;
+  const tMax = Math.max(curM ? curM.sec_per_img : 0, newM.sec_per_img, 1);
+  const rows = [
+    ["单张识别耗时(估)",
+     curM ? cbar(curM.sec_per_img / tMax * 100, "#8ab0ff") + fmtDur(curM.sec_per_img) : "—",
+     cbar(newM.sec_per_img / tMax * 100, "#8ab0ff") + fmtDur(newM.sec_per_img),
+     isSwitch ? delta(curM.sec_per_img, newM.sec_per_img, true) : ""],
+    [(p ? "剩余 " + remain + " 张" : "1000 张") + "跑图时间(估)",
+     curM ? fmtDur(curM.sec_per_img * remain) : "—",
+     fmtDur(newM.sec_per_img * remain),
+     isSwitch ? delta(curM.sec_per_img, newM.sec_per_img, true) : ""],
+    ["预估分组质量 F1",
+     curM ? cbar(curM.f1_est * 100, "#0a9e4a") + Math.round(curM.f1_est * 100) + "%" : "—",
+     cbar(newM.f1_est * 100, "#0a9e4a") + Math.round(newM.f1_est * 100) + "%",
+     isSwitch ? delta(curM.f1_est, newM.f1_est, false) : ""],
+    ["推理内存(估, 含KV)", cmpMemCell(curM, L), cmpMemCell(newM, L), ""],
+    ["JSON 一次通过(估)",
+     curM ? Math.round(curM.json_first_pass * 100) + "%" : "—",
+     Math.round(newM.json_first_pass * 100) + "%",
+     isSwitch ? delta(curM.json_first_pass, newM.json_first_pass, false) : ""],
+    ["磁盘占用",
+     curM ? curM.size_gb + "GB · " + (curM.installed ? "已安装" : "未安装") : "—",
+     newM.size_gb + "GB · " + (newM.installed ? "已安装" : "未安装"), ""],
+  ];
+  const head = isSwitch ? `切换预览: ${shortName(curM.name)} → ${shortName(newM.name)} (${newM.desc})` : `当前模型预估: ${shortName(newM.name)} (${newM.desc})`;
+  let foot = "";
+  if (isSwitch) {
+    foot += newM.installed
+      ? "点「切换到此模型」立即生效: 运行中的服务会停止并释放内存, 下次识别用新模型; 已识别的照片不会重跑。"
+      : `该模型还未下载: 切换后点「下载所选」(约 ${newM.size_gb}GB), 下载完成前无法识别。`;
+    if (L.ram_gb && newM.min_ram_gb > L.ram_gb) foot += ` 注意: 本机内存 ${L.ram_gb}GB 低于该档建议 ${newM.min_ram_gb}GB。`;
+  } else if (L.ram_gb && newM.min_ram_gb > L.ram_gb) {
+    foot += ` 注意: 本机内存 ${L.ram_gb}GB 低于该档建议 ${newM.min_ram_gb}GB。`;
+  }
+  foot += " 预估值来自选型调研预算, 待真机实测校准 (PRD v2 L1)。";
+  const btn = isSwitch ? `<div style="margin-top:8px;text-align:right"><button class="primary" onclick="switchModel()">切换到此模型</button></div>` : "";
+  box.innerHTML = `<div class="cmpbox"><b>${head}</b><table class="cmp">` +
+    "<tr><th></th><th>当前</th><th>" + (isSwitch ? "切换后" : "预估") + "</th><th></th></tr>" +
+    rows.map(r => `<tr><td class="lbl">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="d">${r[3] || ""}</td></tr>`).join("") +
+    `</table><p class="hint">${foot}</p>${btn}</div>`;
+}
+async function switchModel() {
+  const name = $("s_local_model").value;
+  const L = D && D.local, m = L && L.models.find(x => x.name === name);
+  const tip = (m && !m.installed) ? `切换到 ${name}? 该模型还未下载 (约 ${m.size_gb}GB), 切换后请点「下载所选」, 下载完成前无法识别。`
+                                  : `切换到 ${name}? 正在运行的模型服务会停止, 下次识别用新模型 (已识别照片不重跑)。`;
+  if (!(await doConfirm(tip))) return;
+  await api("/api/local/switch", {name}).catch(() => {});
+  await poll();
+  toast("已切换: " + name);
 }
 function onModeChange() {
   const local = $("s_mode").value === "local";

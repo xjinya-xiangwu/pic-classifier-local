@@ -212,5 +212,6 @@ flowchart LR
 
 - **仓库拆分**：本地模型版独立为 [pic-classifier-local](https://github.com/xjinya-xiangwu/pic-classifier-local)（本仓库）；API 版保留在 pic-classifier。
 - **L2 已完成**（Windows 开发机，mock 验证）：`local_engine.py`（模型目录/下载状态机/内存磁盘预检/服务子进程管理/幂等启停）、app.py 接线（mode 设置、`/api/local/*` 端点、本地串行调度、JSON 修复重试）、设置页本地模式界面（模式切换/模型选择/下载进度/服务状态）。
-- **测试**：`test_local_engine.py`（A-F 全过，含伪装 mlx 服务的本地模式识别全链路）；v1 的 smoke 与 API mock e2e 回归通过。
-- **待办**：L1 真机实测（M4 Max：mlx_vlm.server 实际命令行/端口健康检查适配、三档耗时与遵从率、金标准集 F1）→ L3 打磨发版。
+- **模型切换 + 性能对比 已完成**（L2.5，mock 验证）：设置页选模型即时显示切换前后对比（单张/剩余照片跑图时间、F1 质量预估、推理内存占本机比例含 KR-L5 75% 红线预警、JSON 遵从率、磁盘占用，带变化幅度标注）；一键「切换到此模型」（`/api/local/switch`：落盘 + 停旧服务，下次识别自动用新模型）；预估口径取 §6.3 预算，L1 实测后回填校准。
+- **测试**：`test_local_engine.py`（A-G 全过，含伪装 mlx 服务的本地模式识别全链路与切换/元数据校验）；v1 的 smoke 与 API mock e2e 回归通过。
+- **待办**：L1 真机实测（M4 Max：mlx_vlm.server 实际命令行/端口健康检查适配、三档耗时与遵从率、金标准集 F1 → 回填对比表预估口径）→ L3 打磨发版。

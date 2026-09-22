@@ -680,6 +680,8 @@ class Handler(BaseHTTPRequestHandler):
                 import local_engine
                 local_engine.start_download(body.get("name", ""), body.get("endpoint") or get_setting("hf_endpoint"))
                 return self._json({"ok": True})
+            if self.path == "/api/local/switch":
+                return self._json(switch_local_model(body.get("name", "")))
             if self.path == "/api/local/delete":
                 import local_engine
                 return self._json(local_engine.delete_model(body.get("name", "")))
@@ -778,6 +780,17 @@ def select_photo(project_id, photo_id):
             db_exec("UPDATE photo SET selected=0 WHERE id=?", (i,))
         selected = 1
     return {"ok": True, "selected": selected, "cleared": len(ids)}
+
+
+def switch_local_model(name: str) -> dict:
+    """一键切换本地模型: 校验 → 落盘设置 → 停旧服务释放内存 (下次识别按新模型自动重启)。
+    允许切换到未下载的档位 (先定档、后挂机下载), 识别前会再做安装预检。"""
+    import local_engine
+    if name not in local_engine.MODELS:
+        raise ValueError(f"未知模型: {name}")
+    save_settings({"local_model": name})
+    local_engine.stop_server()
+    return {"ok": True, "local_model": name, "installed": local_engine.installed(name)}
 
 
 def state_payload():

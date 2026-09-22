@@ -22,12 +22,22 @@ APP_DIR = Path.home() / ".photocurator"   # 与 app.py 保持一致 (避免循�
 
 MODELS = {
     "Qwen3-VL-30B-A3B-Instruct-4bit": {
-        "repo": "mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit", "size_gb": 18.3, "min_ram_gb": 48},
+        "repo": "mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit", "size_gb": 18.3, "min_ram_gb": 48,
+        "infer_ram_gb": 23, "sec_per_img": 9, "f1_est": 0.90, "json_first_pass": 0.95,
+        "desc": "质量终极档 (MoE: 总参 30B / 每 token 激活 3B, 速度接近小模型)"},
     "Qwen3-VL-8B-Instruct-4bit": {
-        "repo": "mlx-community/Qwen3-VL-8B-Instruct-4bit", "size_gb": 5.8, "min_ram_gb": 16},
+        "repo": "mlx-community/Qwen3-VL-8B-Instruct-4bit", "size_gb": 5.8, "min_ram_gb": 16,
+        "infer_ram_gb": 8.5, "sec_per_img": 10, "f1_est": 0.86, "json_first_pass": 0.90,
+        "desc": "质量升级档"},
     "Qwen3-VL-4B-Instruct-4bit": {
-        "repo": "mlx-community/Qwen3-VL-4B-Instruct-4bit", "size_gb": 3.1, "min_ram_gb": 8},
+        "repo": "mlx-community/Qwen3-VL-4B-Instruct-4bit", "size_gb": 3.1, "min_ram_gb": 8,
+        "infer_ram_gb": 5.5, "sec_per_img": 5, "f1_est": 0.80, "json_first_pass": 0.85,
+        "desc": "默认 MVP 档: 下载最快、内存最省"},
 }
+# 性能预估口径 (PRD v2 §6.3, L1 真机实测前的工作假设):
+#   sec_per_img = 单张识别耗时中值 (预填+生成 ~250 tok); f1_est = 金标准集分组质量预估;
+#   json_first_pass = 枚举 JSON 一次通过率预估。L1 实测后应回填校准。
+
 MODELS_DIR = APP_DIR / "models"
 SERVER_LOG = APP_DIR / "mlx_server.log"
 LOAD_TIMEOUT = 900  # 模型加载健康检查上限 (秒), 18GB 冷读也在 15 分钟内
@@ -325,11 +335,16 @@ atexit.register(stop_server)
 
 def ui_status(cfg: dict) -> dict:
     dl = download_state()
+    ram = physical_ram_gb()
     return {
         "models": [{"name": n, "size_gb": m["size_gb"], "min_ram_gb": m["min_ram_gb"],
-                    "installed": installed(n)} for n, m in MODELS.items()],
+                    "installed": installed(n),
+                    "infer_ram_gb": m["infer_ram_gb"], "sec_per_img": m["sec_per_img"],
+                    "f1_est": m["f1_est"], "json_first_pass": m["json_first_pass"],
+                    "desc": m["desc"],
+                    "ram_ok": (ram is None or ram >= m["min_ram_gb"])} for n, m in MODELS.items()],
         "server": status(),
         "download": dl if (dl["name"] or dl["error"] or dl["done"]) else None,
-        "ram_gb": physical_ram_gb(),
+        "ram_gb": ram,
         "recommended": recommend_model(),
     }
