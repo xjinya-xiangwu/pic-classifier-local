@@ -21,16 +21,35 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 curl -fsSL "$REPO_TARBALL" | tar -xz -C "$DEST" --strip-components=1
 
-echo "==> 2/4 准备 Python (缺失时会弹出开发者工具安装窗口, 点\"安装\"后本脚本自动继续)"
-until python3 -c "" 2>/dev/null; do
+echo "==> 2/4 准备 Python (MLX 需要 ≥3.10; 缺失时会弹开发者工具安装窗口)"
+PY=""
+for cand in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+    PY="$cand"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "错误: 未找到 ≥3.10 的 Python。macOS 自带的 3.9 无法运行本地模型。"
+  echo "请从 https://www.python.org/downloads/ 安装 Python 3.12+ (安装时勾选 Add to PATH),"
+  echo "或执行 brew install python 后, 重新运行本安装命令。"
+  exit 1
+fi
+echo "    使用 $PY ($($PY -V 2>&1))"
+until "$PY" -c "" 2>/dev/null; do
   xcode-select --install 2>/dev/null || true
   echo "    等待 python3 可用... (若弹出安装窗口请点击安装, 约 2-5 分钟)"
   sleep 10
 done
+# 旧 venv 若由 <3.10 的 Python 创建, 自动重建
+if [ -x "$DEST/.venv/bin/python" ] && ! "$DEST/.venv/bin/python" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+  echo "    检测到旧 venv 使用过旧 Python, 重建..."
+  rm -rf "$DEST/.venv"
+fi
 
 echo "==> 3/4 安装依赖 (首次约 1-2 分钟; 仅程序本体, 模型在 App 设置内一键下载)"
 cd "$DEST"
-[ -d .venv ] || python3 -m venv .venv
+[ -d .venv ] || "$PY" -m venv .venv
+./.venv/bin/pip install -q --upgrade pip
 ./.venv/bin/pip install -q -r requirements.txt
 
 echo "==> 4/4 生成 /Applications/PhotoCurator.app"

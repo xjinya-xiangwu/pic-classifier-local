@@ -94,10 +94,22 @@ def _ensure_mlx_deps():
         pass
     if sys.platform != "darwin":
         raise RuntimeError("本地推理仅支持 macOS (Apple Silicon); 当前平台无法安装 MLX")
+    if sys.version_info < (3, 10):
+        raise RuntimeError(
+            f"当前 Python {sys.version_info.major}.{sys.version_info.minor} 过旧, MLX 需要 ≥3.10 "
+            "(macOS 自带的 3.9 不满足)。请安装新版 Python (python.org 或 brew install python) "
+            "后重新执行安装命令, 安装器会自动用新版重建环境。")
     with _dl_lock:
         _dl["msg"] = "正在安装本地推理依赖 (mlx-vlm, 约 300MB)…"
     req = Path(__file__).parent / "requirements-mlx.txt"
-    subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)], check=True)
+    log_path = APP_DIR / "mlx_deps_pip.log"
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)],
+                       capture_output=True, text=True)
+    log_path.write_text((r.stdout or "") + "\n--- stderr ---\n" + (r.stderr or ""), errors="ignore")
+    if r.returncode != 0:
+        tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(无输出)"])[-4:]
+        raise RuntimeError(
+            "MLX 依赖安装失败 (完整日志见 " + str(log_path) + "): " + " | ".join(tail)[-400:])
     with _dl_lock:
         _dl["msg"] = None
 

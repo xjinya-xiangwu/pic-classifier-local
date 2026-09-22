@@ -26,6 +26,28 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xjinya-xiangwu/pic-classifie
 
 实测效果满意后可在设置中手动升级 8B（5.8GB）/ 30B-A3B（18.3GB，需 48GB+ 内存）；内存不足时程序会拒绝加载并提示（KR-L5）。
 
+## 手动下载模型（App 内下载失败时）
+
+App 下载失败的报错会显示在设置页（完整 pip 日志在 `~/.photocurator/mlx_deps_pip.log`）。两种失败分别处理：
+
+**情况 A：MLX 依赖安装失败**（报错含 `pip install -r requirements-mlx.txt`）。多半是 Python 版本过旧（macOS 自带 3.9 不满足 MLX 的 ≥3.10 要求）。处理：
+1. 从 https://www.python.org/downloads/ 安装 Python 3.12+（或 `brew install python`）；
+2. 终端执行 `rm -rf ~/PhotoCurator/.venv` 删掉旧环境；
+3. 重新执行安装命令（会自动选用新版 Python 重建）。
+想看 pip 的真实报错可手动执行：`~/PhotoCurator/.venv/bin/pip install -r ~/PhotoCurator/requirements-mlx.txt`
+
+**情况 B：只差模型权重**。用浏览器手动下载后放入指定目录即可（App 会自动识别）：
+
+1. 浏览器打开（默认镜像）：`https://hf-mirror.com/mlx-community/Qwen3-VL-4B-Instruct-4bit`（官方源把域名换成 `huggingface.co`）；
+2. 点击「Files and versions」标签，下载页面中的**全部文件**到同一个文件夹：
+   - 大文件：`model.safetensors`（3.1GB）、`tokenizer.json`（11MB）
+   - 小文件：`config.json`、`generation_config.json`、`chat_template.jinja`、`chat_template.json`、`preprocessor_config.json`、`video_preprocessor_config.json`、`tokenizer_config.json`、`special_tokens_map.json`、`added_tokens.json`、`merges.txt`、`vocab.json`、`model.safetensors.index.json`
+   （单个大文件的直链格式：`https://hf-mirror.com/mlx-community/Qwen3-VL-4B-Instruct-4bit/resolve/main/model.safetensors`）
+3. 在 Finder 中按 `Cmd+Shift+G` 输入 `~/.photocurator/models/`，新建文件夹 `Qwen3-VL-4B-Instruct-4bit`，把下载的文件全部放进去；
+4. 回到 App 设置页，模型应显示「已安装」，点「启动模型服务」或直接开始识别即可。
+
+其他模型的 8B / 30B-A3B 手动下载同理（多分片模型需下载全部 `model-0000X-of-0000Y.safetensors` 分片）。
+
 ## 使用流程
 
 1. 首页输入照片文件夹路径（Finder 里 `Cmd+Option+C` 复制路径）→ **扫描**（heic/heif/jpg/jpeg/png，可选含子文件夹）；

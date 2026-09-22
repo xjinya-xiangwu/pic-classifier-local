@@ -116,6 +116,7 @@
     <div class="bar" id="dlBarWrap" style="display:none;margin-bottom:8px"><i id="dlBar"></i></div>
     <p id="localStatus" class="hint"></p>
     <p class="hint">模型下载到 ~/.photocurator/models/, 断点续传; 关闭 App 即中断下载。首次下载 3-19GB, 请耐心等待。</p>
+    <p class="hint">下载反复失败? 可手动下载: 浏览器打开 <span style="user-select:all">https://hf-mirror.com/mlx-community/</span> + 模型名 → 下载该页全部文件, 放入 ~/.photocurator/models/模型名/ 文件夹 (详细步骤见仓库 README「手动下载模型」)。</p>
   </div>
   <div id="apiSection">
     <div class="row"><label>API 地址</label><input type="text" id="s_base_url"></div>
@@ -308,7 +309,7 @@ function localPhaseText() {
   if (dl && dl.name) {
     $("dlBarWrap").style.display = "block";
     $("dlBar").style.width = (dl.pct || 0) + "%";
-    t = `正在下载 ${dl.name}: ${dl.pct || 0}% (可关闭窗口, 断点续传) · ` + t;
+    t = (dl.msg ? dl.msg + " " : "") + `正在下载 ${dl.name}: ${dl.pct || 0}% (可关闭窗口, 断点续传) · ` + t;
   } else if (dl && dl.error) {
     t = "上次下载失败: " + dl.error + " · " + t;
   } else if (dl && dl.done) {
