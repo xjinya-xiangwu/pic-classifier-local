@@ -183,7 +183,32 @@ flowchart LR
 | 5 | v2 是否同时作为 v1 的替代发版（本地版设为默认模式） | 是：v2.0 安装后默认本地模式，API 为高级选项 |
 | 6 | 程序与模型的分发关系 | **已拍板（2026-09-22）：安装器只装程序本体**；MLX 依赖 + 模型权重在 App 内「一键下载」时自动安装与适配，进度/断点续传/磁盘预检均页内可见 |
 
-## 10. 实施状态（2026-09-22 更新）
+## 10. 附录：全厂商候选模型调研（2026-09-22，供 L1 实测扩选）
+
+数据来源：InternVL3.5 技术报告 (arXiv:2508.18265) 跨模型对比表、各官方模型卡（分数以图表发布者无法文本提取的，注明第三方同源评测值）。4bit 体积按 MLX 量化比估算（≈0.6-0.7GB/1B 参数）。
+
+| 厂商/系列 | 代表模型 | 参数量 (总/激活) | MLX 4bit 体积 | MMMU | DocVQA | AI2D | OCRBench | 许可 | 结论 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 阿里 Qwen | **Qwen3-VL-4B (默认)** | 4.4B / dense | 3.1GB ✓ | 官方仅图表¹ | — | — | — | Apache-2.0 | 中文结构化最强，默认档 |
+| 阿里 Qwen | Qwen3-VL-8B | ~8B / dense | 5.8GB ✓ | 官方仅图表¹ | — | — | — | Apache-2.0 | 升级档 |
+| 阿里 Qwen | Qwen3-VL-30B-A3B | 30B / 3B | 18.3GB ✓ | 官方仅图表¹ | — | — | — | Apache-2.0 | 质量终极档 (≥48GB) |
+| 智谱 | GLM-4.1V-9B-Thinking | 10.3B / dense | ~6.5GB ✓ | 68.0 | 93.3 | 82.2 | 823 | MIT | 中文强；Thinking 输出需截 JSON（已兼容）；ChartQA 偏低(70) |
+| 月之暗面 | Kimi-VL-A3B-(Thinking-2506) | 16B / **3B** | ~10GB ✓ | 57.0 (Thinking 61.7) | — | 84.9 | 867 | MIT | MoE 快档候选；速度快 |
+| OpenBMB | MiniCPM-V-4.6 | 8.7B / dense | ~5.5GB ✓ | — (4.5 综合 OpenCompass 77.0) | — | — | — | Apache-2.0 | 端侧定位、中文文档 OCR 强 |
+| OpenGVLab | InternVL3.5-8B | 8.5B / dense | ~5.2GB ✗ 无官方移植 | 73.4 | 92.3 | 84.0 | 832 | Apache-2.0 | **同尺寸文本表分最高**，但无 mlx-community 移植 → 暂缓，观望 |
+| OpenGVLab | InternVL3.5-30B-A3B | 30B / 3B | ✗ 无移植 | 75.6 | 94.2 | 86.8 | 880 | Apache-2.0 | 若未来出 MLX，可与 Qwen3-VL-30B-A3B 对比 |
+| Google | Gemma 3 12B / Gemma 4 31B | 12.2B / 31B | 7.6GB ✓ / ~19GB ✓ | 59.6² | — | 78.1² | 702² | Gemma (附加条款) | 中文 JSON 遵从弱 + 许可条款 → 维持排除 |
+| Mistral | Small 3.2 24B | 24B / dense | ~14GB ✓ | — | — | — | — | Apache-2.0 | MLX 权重在但管线标注 text-generation，视觉链路支持存疑 → 观望 |
+| Microsoft | Phi-4-multimodal | 5.6B | ✗ 无移植 | — | — | — | — | MIT | 排除 |
+| Meta | Llama 3.2 Vision 11B | 11B | ~6.2GB ✓(旧) | ~50.7³ | 88.4³ | ~81.4³ | — | Llama | 较老、中文弱 → 不推荐 |
+
+¹ Qwen3-VL 官方基准仅以图表发布（模型卡/技术报告均无文本表格），上代 Qwen2.5-VL-7B 第三方同源评测：MMMU 58.6 / AI2D 83.9 / ChartQA 87.3 / DocVQA 95.7 / OCRBench 864。
+² Kimi-VL 模型卡第三方同源评测值（Gemma3-12B-IT）。
+³ Meta 官方发布值（约数）。
+
+**L1 实测名单（按性价比排序）**：Qwen3-VL-4B（基线）→ GLM-4.1V-9B-Thinking → MiniCPM-V-4.6 → Kimi-VL-A3B-Thinking-2506 → Qwen3-VL-8B。裁决标准以本项目自建的「枚举遵从率 + 金标准集 F1 + 单张耗时」为准，通用基准分数仅作初筛。
+
+## 11. 实施状态（2026-09-22 更新）
 
 - **仓库拆分**：本地模型版独立为 [pic-classifier-local](https://github.com/xjinya-xiangwu/pic-classifier-local)（本仓库）；API 版保留在 pic-classifier。
 - **L2 已完成**（Windows 开发机，mock 验证）：`local_engine.py`（模型目录/下载状态机/内存磁盘预检/服务子进程管理/幂等启停）、app.py 接线（mode 设置、`/api/local/*` 端点、本地串行调度、JSON 修复重试）、设置页本地模式界面（模式切换/模型选择/下载进度/服务状态）。
