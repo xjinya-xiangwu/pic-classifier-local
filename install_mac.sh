@@ -1,14 +1,14 @@
 #!/bin/bash
-# PhotoCurator macOS 一键安装器。
+# PhotoCurator 本地模型版 (pic-classifier-local) macOS 一键安装器。
 # 用法: 浏览器打开本脚本的 GitHub 页面下载, 或直接:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/xjinya-xiangwu/pic-classifier/main/install_mac.sh)
-# 效果: 下载代码到 ~/PhotoCurator, 装好依赖, 在 /Applications 生成 PhotoCurator.app 并启动。
-# 更新版本: 重新执行一次本命令即可。
+#   bash <(curl -fsSL https://raw.githubusercontent.com/xjinya-xiangwu/pic-classifier-local/main/install_mac.sh)
+# 效果: 下载代码到 ~/PhotoCurator, 装好依赖(含 MLX 本地推理), 在 /Applications 生成 PhotoCurator.app 并启动。
+# 更新版本: 重新执行一次本命令即可 (模型文件存于 ~/.photocurator/models/, 升级不受影响)。
 set -e
 
 DEST="$HOME/PhotoCurator"
 APP="/Applications/PhotoCurator.app"
-REPO_TARBALL="https://codeload.github.com/xjinya-xiangwu/pic-classifier/tar.gz/refs/heads/main"
+REPO_TARBALL="https://codeload.github.com/xjinya-xiangwu/pic-classifier-local/tar.gz/refs/heads/main"
 
 echo "==> 0/4 停止正在运行的旧版本 (如有)"
 pkill -f "^./\.venv/bin/python app\.py" 2>/dev/null || true   # 旧版启动器的相对路径进程
@@ -28,7 +28,7 @@ until python3 -c "" 2>/dev/null; do
   sleep 10
 done
 
-echo "==> 3/4 安装依赖 (首次约 1-2 分钟)"
+echo "==> 3/4 安装依赖 (首次约 1-2 分钟; 仅程序本体, 模型在 App 设置内一键下载)"
 cd "$DEST"
 [ -d .venv ] || python3 -m venv .venv
 ./.venv/bin/pip install -q -r requirements.txt

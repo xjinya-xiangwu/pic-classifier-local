@@ -1,0 +1,3 @@
+# 本地推理引擎依赖, 仅 macOS (Apple Silicon) 安装; Windows 不装
+# ponytail: 先不 pin 版本, L1 真机选型时用实测可用版本锁死
+mlx-vlm

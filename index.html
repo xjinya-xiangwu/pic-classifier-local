@@ -84,10 +84,10 @@
 </div>
 <div id="intro">
   <h2>三步整理一批照片</h2>
-  <p>1. 上方输入文件夹路径 → <b>扫描</b>(支持 heic / jpg / jpeg / png)<br>
-     2. 配置模型 API 后 → <b>开始识别</b>(逐张调用视觉模型判断衣着/姿势/角度)<br>
-     3. 逐组点击挑选每组的保留照片 → <b>原地重命名</b>(只改文件名, 可一键撤销)</p>
-  <p style="color:#888">照片仅压缩后发送给你配置的模型 API; 分组结果与撤销记录保存在 ~/.photocurator/。</p>
+  <p>1. 上方输入照片文件夹路径 → <b>扫描</b>(支持 heic / jpg / jpeg / png)<br>
+     2. 默认<b>本地模型</b>模式: 首次在设置中下载模型(3-19GB), 之后完全离线; 也可切换为云端 API<br>
+     3. <b>开始识别</b> → 逐组点击挑选保留照片 → <b>原地重命名</b>(可一键撤销)</p>
+  <p style="color:#888">本地模式下照片完全不出本机; API 模式仅发送压缩图给你配置的服务。记录保存在 ~/.photocurator/。</p>
 </div>
 <div class="dlg" id="confirmDlg"><div class="box">
   <h3>请确认</h3>
@@ -96,13 +96,37 @@
 </div></div>
 <div class="dlg" id="settingsDlg"><div class="box">
   <h3>设置</h3>
-  <div class="row"><label>API 地址</label><input type="text" id="s_base_url"></div>
-  <div class="row"><label>模型名</label><input type="text" id="s_model"></div>
-  <div class="row"><label>API Key</label><input type="password" id="s_api_key" placeholder="智谱等平台密钥"></div>
-  <p class="hint">默认智谱 GLM(OpenAI 兼容协议)。Key 只保存在本机 ~/.photocurator/。</p>
-  <div class="row"><label>并发数</label><input type="number" id="s_concurrency" min="1" max="16"></div>
-  <div class="row"><label>输入价(元/百万token)</label><input type="number" id="s_price_in" step="0.1"></div>
-  <div class="row"><label>输出价(元/百万token)</label><input type="number" id="s_price_out" step="0.1"></div>
+  <div class="row"><label>运行模式</label>
+    <select id="s_mode" onchange="onModeChange()">
+      <option value="local">本地模型 (完全离线, 默认)</option>
+      <option value="api">云端 API (需网络)</option>
+    </select></div>
+  <div id="localSection">
+    <div class="row"><label>本地模型</label><select id="s_local_model"></select></div>
+    <div class="row"><label>下载源</label>
+      <select id="s_hf_endpoint">
+        <option value="https://hf-mirror.com">国内镜像 hf-mirror (默认)</option>
+        <option value="https://huggingface.co">官方 huggingface.co</option>
+      </select></div>
+    <div class="row"><label></label><span style="display:flex;gap:8px">
+      <button class="primary" onclick="downloadModel()">下载所选</button>
+      <button onclick="deleteModel()">删除</button>
+      <button id="srvBtn" onclick="toggleServer()">启动模型服务</button>
+    </span></div>
+    <div class="bar" id="dlBarWrap" style="display:none;margin-bottom:8px"><i id="dlBar"></i></div>
+    <p id="localStatus" class="hint"></p>
+    <p class="hint">模型下载到 ~/.photocurator/models/, 断点续传; 关闭 App 即中断下载。首次下载 3-19GB, 请耐心等待。</p>
+  </div>
+  <div id="apiSection">
+    <div class="row"><label>API 地址</label><input type="text" id="s_base_url"></div>
+    <div class="row"><label>模型名</label><input type="text" id="s_model"></div>
+    <div class="row"><label>API Key</label><input type="password" id="s_api_key" placeholder="智谱等平台密钥"></div>
+    <p class="hint">默认智谱 GLM(OpenAI 兼容协议)。Key 只保存在本机 ~/.photocurator/。</p>
+    <div class="row"><label>并发数</label><input type="number" id="s_concurrency" min="1" max="16"></div>
+    <div class="row"><label>输入价(元/百万token)</label><input type="number" id="s_price_in" step="0.1"></div>
+    <div class="row"><label>输出价(元/百万token)</label><input type="number" id="s_price_out" step="0.1"></div>
+    <p id="apiStatus" class="hint">填写 API 地址 / 模型名 / Key 后将自动测试连通性</p>
+  </div>
   <div class="row"><label>分组粒度</label>
     <select id="s_granularity">
       <option value="coarse">粗 (衣着+朝向)</option>
@@ -110,8 +134,7 @@
       <option value="fine">细 (全维度)</option>
     </select></div>
   <div class="row"><label>期望组数(0=不限)</label><input type="number" id="s_target_count" min="0"></div>
-  <p class="hint">切换粒度/组数即时生效, 不重新调用 API。</p>
-  <p id="apiStatus" class="hint">填写 API 地址 / 模型名 / Key 后将自动测试连通性</p>
+  <p class="hint">切换粒度/组数即时生效, 不重新调用模型。</p>
   <div style="text-align:right"><button onclick="closeDlg('settingsDlg')">取消</button> <button class="primary" onclick="saveSettings()">保存</button></div>
 </div></div>
 <script>
@@ -198,10 +221,20 @@ function render() {
   // 进度区
   let ptxt = "", pct = 0, scanning = false;
   if (D.scan) { scanning = true; ptxt = `扫描中 ${D.scan.done}/${D.scan.total}` + (D.scan.errors.length ? ` · 异常 ${D.scan.errors.length} 个` : ""); pct = D.scan.total ? 100 * D.scan.done / D.scan.total : 0; }
-  else if (D.tag) { scanning = true; ptxt = `识别中 ${D.tag.done}/${D.tag.total} · 失败 ${D.tag.failed}`; pct = D.tag.total ? 100 * D.tag.done / D.tag.total : 0; }
+  else if (D.tag) { scanning = true; ptxt = `识别中 ${D.tag.done}/${D.tag.total} · 失败 ${D.tag.failed}` + (D.tag.fatal ? " · " + D.tag.fatal : ""); pct = D.tag.total ? 100 * D.tag.done / D.tag.total : 0;
+    if (D.local && D.local.server && D.local.server.phase === "loading") ptxt += " · 模型加载中…"; }
+  else if (D.local && D.local.download && D.local.download.name) { scanning = true; ptxt = `模型下载中 ${D.local.download.name}: ${D.local.download.pct || 0}%`; pct = D.local.download.pct || 0; }
   $("progress").style.display = scanning ? "block" : "none";
   if (scanning) { $("ptext").textContent = ptxt; $("pbar").style.width = pct + "%"; }
   $("stopBtn").style.display = D.tag ? "" : "none";
+  if (D.local) {  // 本地模式: 状态行与下载条常驻刷新 (设置对话框开着时也可见)
+    $("localStatus").textContent = localPhaseText();
+    const ph = D.local.server && D.local.server.phase;
+    $("srvBtn").textContent = (ph === "ready" || ph === "loading") ? "停止模型服务" : "启动模型服务";
+    const dl = D.local.download;
+    $("dlBarWrap").style.display = (dl && dl.name) ? "block" : "none";
+    if (dl && dl.name) $("dlBar").style.width = (dl.pct || 0) + "%";
+  }
   const ready = p && p.tagged > 0 && D.groups && D.groups.length;
   $("renameBtn").disabled = !ready;  // 没有已识别照片时禁止重命名, 防止误点报错
   $("main").style.display = ready ? "flex" : "none";
@@ -235,11 +268,69 @@ async function pick(id) {
 function nz(v, d) { return v == null ? d : v; }  // 老浏览器无 ?? 运算符, 用函数代替
 function fillSettings() {
   const s = (D && D.settings) || {};  // D 未就绪时用默认值, 保证对话框总能打开
+  $("s_mode").value = s.mode || "local";
+  onModeChange();
+  fillLocalSelect();
   $("s_base_url").value = s.base_url || "https://open.bigmodel.cn/api/paas/v4";
   $("s_model").value = s.model || "glm-5.3-flash";
   $("s_api_key").value = ""; $("s_api_key").placeholder = s.api_key ? "已保存 (留空则不修改)" : "sk-...";
   $("s_concurrency").value = nz(s.concurrency, 6); $("s_price_in").value = nz(s.price_in, 0); $("s_price_out").value = nz(s.price_out, 0);
   $("s_granularity").value = s.granularity || "medium"; $("s_target_count").value = nz(s.target_count, 0);
+  if ($("s_mode").value === "local") apiStatusShow("本地模式: 照片不出本机, 无需 API 配置", "");
+}
+function fillLocalSelect() {
+  const L = D && D.local;
+  if (!L) return;
+  const sel = $("s_local_model");
+  const cur = sel.value;  // poll 期间保留用户已选
+  sel.innerHTML = L.models.map(m =>
+    `<option value="${m.name}">${m.name} · ${m.size_gb}GB${m.installed ? " · 已安装" : ""}</option>`).join("");
+  sel.value = (D.settings && D.settings.local_model) || L.recommended || cur;
+  if (![...sel.options].some(o => o.value === sel.value)) sel.value = L.models[0].name;
+}
+function onModeChange() {
+  const local = $("s_mode").value === "local";
+  $("localSection").style.display = local ? "block" : "none";
+  $("apiSection").style.display = local ? "none" : "block";
+  lastApiSig = "#mode";  // 切回 API 模式时强制重新检测
+  if (!local) scheduleApiCheck();
+}
+function localPhaseText() {
+  const L = D && D.local;
+  if (!L) return "";
+  let t = (L.ram_gb ? `本机内存 ${L.ram_gb}GB · 推荐档位 ${L.recommended}` : "无法检测内存") ;
+  const ph = L.server && L.server.phase;
+  if (ph === "ready") t += ` · 服务运行中 (端口 ${L.server.port})`;
+  else if (ph === "loading") t += " · 模型加载中… (首次约 1-3 分钟)";
+  else if (ph === "failed") t += " · 服务启动失败: " + (L.server.error || "");
+  else t += " · 服务未启动 (开始识别时自动启动)";
+  const dl = L.download;
+  if (dl && dl.name) {
+    $("dlBarWrap").style.display = "block";
+    $("dlBar").style.width = (dl.pct || 0) + "%";
+    t = `正在下载 ${dl.name}: ${dl.pct || 0}% (可关闭窗口, 断点续传) · ` + t;
+  } else if (dl && dl.error) {
+    t = "上次下载失败: " + dl.error + " · " + t;
+  } else if (dl && dl.done) {
+    t = "下载完成: " + dl.done + " · " + t;
+  }
+  return t;
+}
+async function downloadModel() {
+  await api("/api/local/download", {name: $("s_local_model").value}).catch(() => {});
+  poll();
+}
+async function deleteModel() {
+  const name = $("s_local_model").value;
+  if (!(await doConfirm(`删除模型 ${name}? (可随时重新下载)`))) return;
+  await api("/api/local/delete", {name}).catch(() => {});
+  poll();
+}
+async function toggleServer() {
+  const ph = D && D.local && D.local.server && D.local.server.phase;
+  const action = (ph === "ready" || ph === "loading") ? "stop" : "start";
+  await api("/api/local/server", {action}).catch(() => {});
+  poll();
 }
 function openSettings() { fillSettings(); dlgOpen("settingsDlg"); scheduleApiCheck(); }
 
@@ -251,6 +342,7 @@ function readApiForm() {
 function apiSig(s) { return s.base_url + "|" + s.model + "|" + (s.api_key || "(saved)"); }
 function apiStatusShow(text, cls) { const el = $("apiStatus"); el.textContent = text; el.className = "hint " + (cls || ""); }
 function scheduleApiCheck() {
+  if ($("s_mode").value === "local") { apiStatusShow("本地模式: 照片不出本机, 无需 API 配置", ""); return; }
   const s = readApiForm(), sig = apiSig(s);
   if (sig === lastApiSig) return;  // 配置没变不重复检测
   clearTimeout(apiCheckTimer);
@@ -283,14 +375,16 @@ async function runApiCheck(sig) {
   $(id).addEventListener("change", scheduleApiCheck);
 });
 async function saveSettings() {
-  const body = {base_url: $("s_base_url").value.trim(), model: $("s_model").value.trim(),
+  const body = {mode: $("s_mode").value,
+    local_model: $("s_local_model").value, hf_endpoint: $("s_hf_endpoint").value,
+    base_url: $("s_base_url").value.trim(), model: $("s_model").value.trim(),
     concurrency: +$("s_concurrency").value, price_in: +$("s_price_in").value, price_out: +$("s_price_out").value,
     granularity: $("s_granularity").value, target_count: +$("s_target_count").value};
   if ($("s_api_key").value.trim()) body.api_key = $("s_api_key").value.trim();
   await api("/api/settings", body);
   await poll();
   closeDlg("settingsDlg");
-  toast("设置已保存");
+  toast(body.mode === "local" ? "设置已保存 (本地模式)" : "设置已保存 (API 模式)");
 }
 
 async function doRename() {

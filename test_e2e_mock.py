@@ -86,7 +86,7 @@ def wait_tag_done(seconds=30):
 
 
 # --- 成功路径 ---
-pc.save_settings({"base_url": MOCK_URL, "model": "mock-model",
+pc.save_settings({"mode": "api", "base_url": MOCK_URL, "model": "mock-model",
                   "api_key": FAKE_KEY, "concurrency": 3})
 _real_check = pc.check_public_http_url
 pc.check_public_http_url = ALLOW_CHECK  # 仅测试内放行本机 mock

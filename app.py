@@ -72,6 +72,11 @@ DEFAULTS = {
     "target_count": 0,         # >0 时合并到不超过该组数
     "price_in": 0.0,           # 元 / 百万输入 token, 用于成本显示, 0=不计价
     "price_out": 0.0,
+    # --- v2 本地模型模式 (PRD v2) ---
+    "mode": "local",           # local = 本机 MLX 推理 (完全离线) | api = 云端 OpenAI 兼容接口
+    "local_model": "Qwen3-VL-4B-Instruct-4bit",   # 默认最小 MVP 档 (用户决策: 先小档实测, 再手动升级)
+    "hf_endpoint": "https://hf-mirror.com",       # 模型下载源, 空串 = HF 官方
+    "local_server_cmd": "{python} -m mlx_vlm.server --model {model_path} --host 127.0.0.1 --port {port}",
 }
 
 # ---------------------------------------------------------------- 数据库
@@ -208,44 +213,90 @@ def check_public_http_url(url: str):
             raise ValueError(f"API 地址指向内网/保留地址, 已拒绝: {sp.hostname} -> {ip}")
 
 
-def vlm_tag(jpeg_bytes: bytes, cfg: dict) -> dict:
-    """调用 OpenAI 兼容视觉接口, 返回校验后的标签 dict。失败抛异常。cfg 可含 _folder 用于成本归集。"""
-    b64 = base64.b64encode(jpeg_bytes).decode()
-    body = {
-        "model": cfg["model"], "temperature": 0,
-        "messages": [
-            {"role": "system", "content": PROMPT},
-            {"role": "user", "content": [
-                {"type": "image_url",
-                 "image_url": {"url": "data:image/jpeg;base64," + b64}},
-                {"type": "text", "text": "标注这张照片。"}]},
-        ],
-    }
-    url = cfg["base_url"].rstrip("/") + "/chat/completions"
-    check_public_http_url(url)
+class TagParseError(Exception):
+    """模型输出无法解析为标注 JSON; 携带原始输出供修复重试回喂 (PRD v2 D5)。"""
+
+    def __init__(self, content: str, msg: str):
+        super().__init__(msg)
+        self.content = content
+        self.msg = msg
+
+
+def _tag_messages(b64: str, repair=None) -> list:
+    msgs = [
+        {"role": "system", "content": PROMPT},
+        {"role": "user", "content": [
+            {"type": "image_url",
+             "image_url": {"url": "data:image/jpeg;base64," + b64}},
+            {"type": "text", "text": "标注这张照片。"}]},
+    ]
+    if repair:  # (上次原始输出, 解析错误) — 回喂让模型自修一次
+        msgs += [{"role": "assistant", "content": str(repair[0])[:600]},
+                 {"role": "user", "content":
+                     f"你上一次的输出无法解析为要求的JSON ({repair[1]})。请重新只输出一个符合要求的完整 JSON 对象, 不要任何其他文字。"}]
+    return msgs
+
+
+def _chat_url(cfg: dict) -> str:
+    if cfg.get("mode") == "local":
+        import local_engine
+        return local_engine.server_url() + "/chat/completions"  # 本机环回, 免公网校验
+    return cfg["base_url"].rstrip("/") + "/chat/completions"
+
+
+def _post_chat(cfg: dict, messages: list) -> str:
+    """一次标注请求 (含 429/超时/5xx 退避重试), 返回模型输出文本。"""
+    url = _chat_url(cfg)
+    if cfg.get("mode") != "local":
+        check_public_http_url(url)
+    body = {"model": cfg["local_model"] if cfg.get("mode") == "local" else cfg["model"],
+            "temperature": 0, "messages": messages}
+    timeout = 600 if cfg.get("mode") == "local" else 120  # 本地首次请求可能撞上模型加载
     last_err = None
-    for attempt in range(5):  # 429/超时/5xx 指数退避
+    for attempt in range(5):
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                         headers={"Authorization": "Bearer " + cfg["api_key"],
+                                         headers={"Authorization": "Bearer " + (cfg.get("api_key") or "local"),
                                                   "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read())
             usage = data.get("usage") or {}
             add_usage(cfg.get("_folder", ""), usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
-            content = data["choices"][0]["message"]["content"]
-            content = content[content.index("{"): content.rindex("}") + 1]
-            return validate_tag(json.loads(content))
+            return data["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
             if e.code not in (429, 500, 502, 503, 504):
                 raise RuntimeError(f"API HTTP {e.code}: {e.read().decode(errors='ignore')[:300]}")
             last_err = f"HTTP {e.code}"
-        except (KeyError, ValueError, json.JSONDecodeError) as e:
-            raise RuntimeError(f"返回内容无法解析: {e}")  # 温度为0, 原样重试无意义
+        except (KeyError, IndexError) as e:
+            raise RuntimeError(f"返回结构异常: {e}")  # 服务通了但没按 OpenAI 格式回, 重试无意义
         except Exception as e:
             last_err = str(e)
         time.sleep(min(2 ** attempt, 16))
     raise RuntimeError(f"重试 5 次仍失败: {last_err}")
+
+
+def _parse_tag(content) -> dict:
+    try:
+        if isinstance(content, dict):  # 个别兼容服务直接把 JSON 对象放在 content 里
+            return validate_tag(content)
+        s = content[content.index("{"): content.rindex("}") + 1]
+        return validate_tag(json.loads(s))
+    except TagParseError:
+        raise
+    except Exception as e:
+        raise TagParseError(str(content) if not isinstance(content, str) else content, str(e))
+
+
+def vlm_tag(jpeg_bytes: bytes, cfg: dict) -> dict:
+    """调用 OpenAI 兼容视觉接口 (本地或云端), 返回校验后的标签 dict。失败抛异常。"""
+    b64 = base64.b64encode(jpeg_bytes).decode()
+    try:
+        return _parse_tag(_post_chat(cfg, _tag_messages(b64)))
+    except TagParseError as e1:
+        try:  # JSON 修复重试 (PRD v2 D5): 本地模型遵从度低于旗舰 API, 失败回喂重试一次
+            return _parse_tag(_post_chat(cfg, _tag_messages(b64, repair=(e1.content, e1.msg))))
+        except TagParseError as e2:
+            raise RuntimeError(f"两次输出均无法解析为标注 JSON: {str(e2)[:200]}")
 
 
 def validate_tag(t: dict) -> dict:
@@ -362,18 +413,24 @@ def tag_one(row, cfg, project_id):
 
 def start_tagging(project_id):
     cfg = get_setting(None)
-    if not cfg["api_key"]:
+    local = cfg.get("mode") == "local"
+    if local:
+        import local_engine
+        if not local_engine.installed(cfg["local_model"]):
+            raise ValueError(f"本地模型 {cfg['local_model']} 未下载, 请在设置中下载后再识别")
+    elif not cfg["api_key"]:
         raise ValueError("未配置 API Key, 请先在设置中填写")
     with STATE_LOCK:
         if STATE["tag"]:
             return
-        st = {"done": 0, "total": 0, "failed": 0, "stop": False}
+        st = {"done": 0, "total": 0, "failed": 0, "stop": False, "fatal": None}
         STATE["tag"] = st
     db_exec("UPDATE photo SET status='scanned' WHERE project_id=? AND status='tagging'", (project_id,))
     rows = db_all("SELECT id, path, content_hash FROM photo WHERE project_id=? AND status IN ('scanned','failed') "
                   "ORDER BY taken_at", (project_id,))
     st["total"] = len(rows)
     cfg["_folder"] = project_folder(project_id)
+    workers = 1 if local else max(1, int(cfg["concurrency"]))  # 本地单 GPU 串行最快 (PRD v2 D3)
 
     def worker(row):
         if st["stop"]:
@@ -389,7 +446,16 @@ def start_tagging(project_id):
         st["done"] += 1
 
     def run():
-        with ThreadPoolExecutor(max_workers=int(cfg["concurrency"])) as ex:
+        if local:  # 先确保本地服务就绪 (模型加载可达数分钟, 阶段经 state 下发前端)
+            try:
+                local_engine.ensure_server(cfg)
+                local_engine.wait_ready(cfg)
+            except Exception as e:
+                st["fatal"] = str(e)[:300]
+                with STATE_LOCK:
+                    STATE["tag"] = None
+                return
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             futures = [ex.submit(worker, r) for r in rows]
             for f in as_completed(futures):
                 f.result()
@@ -604,8 +670,29 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             pid = current_project_id()
             if self.path == "/api/settings":
+                prev = get_setting(None)
                 cfg = save_settings(body)
+                if cfg.get("mode") != "local" or cfg.get("local_model") != prev.get("local_model"):
+                    import local_engine
+                    local_engine.stop_server()  # 换模式/换模型: 旧服务立即让出内存, 下次识别按新配置重启
                 return self._json({"ok": True, "settings": {k: cfg[k] for k in DEFAULTS}})
+            if self.path == "/api/local/download":
+                import local_engine
+                local_engine.start_download(body.get("name", ""), body.get("endpoint") or get_setting("hf_endpoint"))
+                return self._json({"ok": True})
+            if self.path == "/api/local/delete":
+                import local_engine
+                return self._json(local_engine.delete_model(body.get("name", "")))
+            if self.path == "/api/local/server":
+                import local_engine
+                if body.get("action") == "stop":
+                    local_engine.stop_server()
+                    return self._json({"ok": True})
+                cfg = get_setting(None)
+                if cfg.get("mode") != "local":
+                    return self._json({"error": "当前为 API 模式, 无需启动本地服务"}, 400)
+                local_engine.ensure_server(cfg)
+                return self._json({"ok": True})
             if self.path == "/api/check-api":
                 return self._json(check_api_from_payload(body))
             if self.path == "/api/open":
@@ -698,6 +785,11 @@ def state_payload():
     cfg["api_key"] = "***" if cfg["api_key"] else ""
     pid = current_project_id()
     out = {"settings": cfg, "scan": STATE["scan"], "tag": STATE["tag"], "project": None}
+    try:  # 本地引擎状态 (模型列表/下载进度/服务阶段); 引擎缺失不阻塞整体状态
+        import local_engine
+        out["local"] = local_engine.ui_status(cfg)
+    except Exception:
+        out["local"] = None
     if pid:
         folder = project_folder(pid)
         counts = db_one("SELECT COUNT(*), SUM(status='tagged'), SUM(status='failed') FROM photo WHERE project_id=?",
@@ -758,7 +850,13 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "check-api":
         init_db(APP_DIR / "photocurator.db")
         cfg = get_setting(None)
-        if not cfg["api_key"]:
+        if cfg.get("mode") == "local":
+            import local_engine
+            if not local_engine.installed(cfg["local_model"]):
+                sys.exit(f"本地模型未下载: {cfg['local_model']} (打开 App 设置页下载)")
+            local_engine.ensure_server(cfg)
+            local_engine.wait_ready(cfg)
+        elif not cfg["api_key"]:
             sys.exit("未配置 API Key (设置页填写或设 ZHIPU_API_KEY 环境变量)")
         img = Image.new("RGB", (256, 384), (240, 240, 240))
         buf = io.BytesIO()

@@ -54,9 +54,9 @@ v1（GLM API 方案）已交付并在真实拍摄集上可用，但存在四个�
 
 | 档位 | 模型（mlx-community 4bit） | 权重体积 | 推理内存（含 KV/视觉塔，估） | 定位 |
 | --- | --- | --- | --- | --- |
-| **主力推荐** | [Qwen3-VL-30B-A3B-Instruct-4bit](https://hf.co/mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit) | 18.3GB | ~22–24GB | MoE 架构：总参 30B、**每 token 仅激活 3B** → 生成速度接近 4B 小模型、理解质量接近 30B 大模型。48GB+ 机型默认 |
-| 均衡 | [Qwen3-VL-8B-Instruct-4bit](https://hf.co/mlx-community/Qwen3-VL-8B-Instruct-4bit) | 5.8GB | ~8–9GB | 36GB 机型稳妥默认；质量/速度均衡 |
-| 快速 | [Qwen3-VL-4B-Instruct-4bit](https://hf.co/mlx-community/Qwen3-VL-4B-Instruct-4bit) | 3.1GB | ~5–6GB | 预览/低配档；HF 下载量 129K，社区验证充分 |
+| **默认 MVP** | [Qwen3-VL-4B-Instruct-4bit](https://hf.co/mlx-community/Qwen3-VL-4B-Instruct-4bit) | 3.1GB | ~5–6GB | **默认档（用户决策 2026-09-22：先最小可用档实测）**。下载快（分钟级）、内存最省、任何目标机型可跑；HF 下载量 129K，社区验证充分 |
+| 升级选项 | [Qwen3-VL-8B-Instruct-4bit](https://hf.co/mlx-community/Qwen3-VL-8B-Instruct-4bit) | 5.8GB | ~8–9GB | 质量升级手动选项（需 ≥16GB 内存） |
+| 升级选项 | [Qwen3-VL-30B-A3B-Instruct-4bit](https://hf.co/mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit) | 18.3GB | ~22–24GB | MoE：总参 30B、每 token 激活 3B → 速度接近小模型、质量接近 30B。质量终极档（需 ≥48GB 内存） |
 
 **全部为 Apache-2.0 License，商用无限制。** Qwen 系是中文结构化输出（本应用枚举 JSON 契约）的最强开源自选。
 
@@ -103,7 +103,8 @@ flowchart LR
 | D3 | 本地模式**并发 = 1** | 单 GPU 串行最快（并发请求在 MLX 内排队反而增加峰值内存）。千张 2–3 小时是「挂机成本」而非「等待成本」——进度条 + 断点续跑已覆盖体验。多图拼批（一次推理 2–4 图）列为 L3 可选优化 |
 | D4 | 图片预处理不变（长边 1024px JPEG q85） | 视觉 token 数与质量平衡已在 v1 验证；本地模式无带宽顾虑但仍受 KV cache 内存约束 |
 | D5 | Prompt/枚举契约不变 | 分组引擎、组名生成全部复用；新增「**JSON 修复重试**」：校验失败时把错误信息回喂模型重试 1 次（本地模型 JSON 遵从度低于旗舰 API，这是质量保底关键） |
-| D6 | 模型存 `~/PhotoCurator/models/`，用 huggingface_hub 下载 | 天然断点续传；`HF_ENDPOINT=https://hf-mirror.com` 环境变量自动启用国内镜像（下载页提供开关）；下载前校验磁盘剩余空间 ≥ 体积 × 1.2 |
+| D6 | 模型存 `~/.photocurator/models/`（数据目录，**不放安装目录**——安装器升级会清空 `~/PhotoCurator`，避免误删 19GB 权重），用 huggingface_hub 下载 | 天然断点续传；`HF_ENDPOINT=https://hf-mirror.com` 默认国内镜像（设置页可切官方）；下载前校验磁盘剩余空间 ≥ 体积 × 1.2 |
+| D8 | **安装器只装程序本体**（用户决策 2026-09-22）：MLX 推理依赖与模型权重均不在安装期下载；用户首次在设置页点「下载所选」时，程序自动安装 MLX 依赖（~300MB，仅 macOS 可装）再下载权重（3–19GB），全程页内进度与断点续传 | 安装包最小化；模型模块与程序版本解耦；非 macOS 平台点下载时给出明确拒绝提示 |
 | D7 | 设置页新增「运行模式」三态：本地 / API /（默认）本地 | API 模式完整保留（KR-L6）；两模式标签缓存共用（按文件哈希键，与后端无关） |
 
 ### 6.3 性能预算（M4 Max 实测前的工作假设，L1 校准）
@@ -130,11 +131,14 @@ flowchart LR
 ### 6.5 数据与文件布局（增量）
 
 ```
-~/PhotoCurator/
-├── models/                          ← 新增：模型权重
-│   └── Qwen3-VL-30B-A3B-Instruct-4bit/   (~18.3GB)
+~/PhotoCurator/                     ← 程序目录 (安装器管理, 升级可整体清空重建)
+├── app.py / index.html / .venv/
 └── app.log
-~/.photocurator/                     ← 不变：数据库/缩略图/撤销记录/清单
+~/.photocurator/                    ← 数据目录 (升级不触碰)
+├── models/                         ← 新增：模型权重 (程序目录之外, 防 rm -rf 误删)
+│   └── Qwen3-VL-4B-Instruct-4bit/  (~3.1GB, 默认 MVP 档)
+├── mlx_server.log
+├── photocurator.db / thumbs/ …     ← v1 原有
 ```
 
 ## 7. 假设与风险
@@ -170,10 +174,18 @@ flowchart LR
 
 ## 9. Open Questions（评审拍板项）
 
-| # | 问题 | 建议默认 |
+| # | 问题 | 决策 |
 | --- | --- | --- |
-| 1 | 默认档位：30B-A3B（质量优先）还是 8B（兼容 36GB 机型） | 按物理内存自动推荐：≥48GB → 30B-A3B；36GB → 8B；用户可手动改 |
+| 1 | 默认档位 | **已拍板（2026-09-22）：一律默认最小 MVP 档 4B**，实测效果后由用户手动升级 8B / 30B-A3B；内存预检仅做上限拦截（8B 需 ≥16GB、30B 需 ≥48GB），不主动推荐大档 |
 | 2 | API 模式是否在 v2 安装包中保留 | 保留（代码零成本，外勤赶时间场景有价值） |
 | 3 | 多图拼批优化（单次推理 2–4 图）是否进 L2 | 不进，列 L3 可选（先保证串行正确性） |
 | 4 | 模型下载源默认走 hf-mirror 还是 HF 官方 | 默认 hf-mirror（国内用户为主），设置页可切官方 |
 | 5 | v2 是否同时作为 v1 的替代发版（本地版设为默认模式） | 是：v2.0 安装后默认本地模式，API 为高级选项 |
+| 6 | 程序与模型的分发关系 | **已拍板（2026-09-22）：安装器只装程序本体**；MLX 依赖 + 模型权重在 App 内「一键下载」时自动安装与适配，进度/断点续传/磁盘预检均页内可见 |
+
+## 10. 实施状态（2026-09-22 更新）
+
+- **仓库拆分**：本地模型版独立为 [pic-classifier-local](https://github.com/xjinya-xiangwu/pic-classifier-local)（本仓库）；API 版保留在 pic-classifier。
+- **L2 已完成**（Windows 开发机，mock 验证）：`local_engine.py`（模型目录/下载状态机/内存磁盘预检/服务子进程管理/幂等启停）、app.py 接线（mode 设置、`/api/local/*` 端点、本地串行调度、JSON 修复重试）、设置页本地模式界面（模式切换/模型选择/下载进度/服务状态）。
+- **测试**：`test_local_engine.py`（A-F 全过，含伪装 mlx 服务的本地模式识别全链路）；v1 的 smoke 与 API mock e2e 回归通过。
+- **待办**：L1 真机实测（M4 Max：mlx_vlm.server 实际命令行/端口健康检查适配、三档耗时与遵从率、金标准集 F1）→ L3 打磨发版。
