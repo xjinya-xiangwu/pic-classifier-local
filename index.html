@@ -49,6 +49,12 @@
   .failLink { color: #b3261e; text-decoration: underline; cursor: pointer; }
   #apiStatus.ok { color: #0a9e4a; }
   #apiStatus.err { color: #b3261e; }
+  /* 顶栏模型状态按钮: 醒目提示本地模型是否可用 */
+  #modelBtn.st-ok { background: #0a9e4a; border-color: #0a9e4a; color: #fff; }
+  #modelBtn.st-warn { background: #e6a700; border-color: #e6a700; color: #fff; }
+  #modelBtn.st-err { background: #c62828; border-color: #c62828; color: #fff; animation: pulse 1.2s infinite; }
+  #modelBtn.st-idle { color: #666; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
   /* 模型切换性能对比 */
   .cmpbox { border: 1px solid #e5e5ea; border-radius: 8px; padding: 10px 12px; margin: 2px 0 10px 138px; }
   .cmp { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12px; }
@@ -75,6 +81,7 @@
   <button class="primary" onclick="openFolder()">扫描</button>
   <button onclick="startTag()">开始识别</button>
   <button onclick="stopTag()" id="stopBtn" style="display:none">暂停</button>
+  <button id="modelBtn" class="st-idle" onclick="openSettings()">检查中…</button>
   <button onclick="openSettings()">设置</button>
 </header>
 <div id="connBanner"></div>
@@ -226,6 +233,53 @@ setInterval(poll, 2000);
 function failSpan(p) {
   return p.failed ? `<span class="failLink" onclick="showErrors()">失败 ${p.failed} 张 (点看原因)</span>` : "";
 }
+
+// ---- 顶栏模型状态按钮: 一眼看出本地模型是否可用; 不可用时红色闪烁, 点击直达设置 ----
+function updateModelBtn() {
+  const b = $("modelBtn");
+  const s = (D && D.settings) || {}, L = D && D.local;
+  b.className = "";
+  if (s.mode === "api") {
+    b.classList.add("st-idle");
+    b.textContent = "API 模式";
+    b.title = "当前为云端 API 模式, 不使用本地模型。点击打开设置";
+    return;
+  }
+  if (!L) {
+    b.classList.add("st-idle");
+    b.textContent = "模型状态未知";
+    b.title = "无法读取本地引擎状态。点击打开设置";
+    return;
+  }
+  const ph = L.server && L.server.phase;
+  const dl = L.download;
+  const cur = L.models && L.models.find(m => m.name === s.local_model);
+  if (ph === "ready") {
+    b.classList.add("st-ok");
+    b.textContent = "● 模型已就绪" + (cur ? " (" + shortName(cur.name) + ")" : "");
+    b.title = "本地模型已加载可用。点击打开设置";
+  } else if (ph === "loading") {
+    b.classList.add("st-warn");
+    b.textContent = "◌ 模型加载中…";
+    b.title = "模型正在加载 (首次约 1-3 分钟), 加载完成后自动开始识别。点击打开设置";
+  } else if (dl && dl.name) {
+    b.classList.add("st-warn");
+    b.textContent = "模型下载中 " + (dl.pct || 0) + "%";
+    b.title = "模型正在下载, 完成前识别不可用。点击打开设置";
+  } else if (ph === "failed") {
+    b.classList.add("st-err");
+    b.textContent = "✗ 模型加载失败";
+    b.title = "上次服务启动失败: " + ((L.server.error || "").slice(0, 120)) + " 点击打开设置查看";
+  } else if (!cur || !cur.installed) {
+    b.classList.add("st-err");
+    b.textContent = "⚠ 未安装模型";
+    b.title = "当前模型 " + (s.local_model || "") + " 未下载, 识别不可用! 点击打开设置下载模型";
+  } else {
+    b.classList.add("st-err");
+    b.textContent = "⚠ 模型未加载";
+    b.title = "模型已安装但服务未启动 — 开始识别时会自动加载, 也可点击打开设置手动启动";
+  }
+}
 function showErrors() {
   const errs = (D.project && D.project.failed_errors) || [];
   if (!errs.length) { toast("没有失败详情 (可能是旧版本识别的)", true); return; }
@@ -251,6 +305,7 @@ function render() {
     if (dl && dl.name) $("dlBar").style.width = (dl.pct || 0) + "%";
     if ($("settingsDlg").style.display === "block") renderModelCompare();  // 弹窗打开时保持对比数据最新
   }
+  updateModelBtn();  // 顶栏模型状态按钮 (每次 poll 刷新)
   const ready = p && p.tagged > 0 && D.groups && D.groups.length;
   $("renameBtn").disabled = !ready;  // 没有已识别照片时禁止重命名, 防止误点报错
   $("main").style.display = ready ? "flex" : "none";
