@@ -4,7 +4,9 @@
 #   bash <(curl -fsSL https://raw.githubusercontent.com/xjinya-xiangwu/pic-classifier-local/main/install_mac.sh)
 # 效果: 下载代码到 ~/PhotoCuratorLocal, 装好依赖, 在 /Applications 生成 "PhotoCurator Local.app" 并启动。
 # 与 API 版 (PhotoCurator.app, 端口 8765) 完全独立: 不同目录/应用名/端口 (本版 8776+), 可共存。
-# 更新版本: 重新执行一次本命令即可 (模型文件存于 ~/.photocurator/models/, 升级不受影响)。
+# 覆盖模式: 每次运行都自动停止并删除旧程序 (含旧 venv), 下载全新代码重建;
+# 模型权重与用户数据在 ~/.photocurator/ (数据目录), 始终保留; 用户照片文件夹从不改动。
+# 更新版本: 重新执行一次本命令即可。
 set -e
 
 DEST="$HOME/PhotoCuratorLocal"
@@ -23,9 +25,24 @@ for p in 8765 8766 8767 8768 8769 8770 8771 8772 8773 8774 8775 8776 8777 8778 8
 done
 sleep 1
 
-echo "==> 1/4 下载代码到 $DEST"
+# 覆盖模式: 顺带清理更早期版本 (与 API 版共用 ~/PhotoCurator 目录的时代) 的残留程序。
+# 仅当该目录的 app.py 含 local_engine (确认是旧本地版) 才删, API 版的目录一律不碰;
+# 模型与用户数据在 ~/.photocurator/, 与程序目录无关, 始终保留。
+OLDDEST="$HOME/PhotoCurator"
+if [ -f "$OLDDEST/app.py" ] && grep -q "local_engine" "$OLDDEST/app.py" 2>/dev/null; then
+  echo "    检测到更早期版本的本地版残留 ($OLDDEST), 一并清理..."
+  rm -rf "$OLDDEST"
+  rm -rf "/Applications/PhotoCurator.app"   # 此时该包必属旧本地版 (旧版与 API 版包同名)
+  echo "    已清理。API 版 PhotoCurator 若有安装则不受影响。"
+fi
+
+echo "==> 1/4 覆盖安装: 删除旧程序目录并下载最新代码"
+# 覆盖模式只删程序本身; 以下资产在数据目录 ~/.photocurator/, 始终保留:
+#   已下载的模型 (models/) · 索引数据库 · 缩略图 · 撤销记录 · 清单 CSV; 用户的照片文件夹从不改动。
+[ -f "$DEST/app.log" ] && cp "$DEST/app.log" "$HOME/.photocurator/app.log.old" 2>/dev/null || true
 rm -rf "$DEST"
 mkdir -p "$DEST"
+echo "    已保留: 模型与数据 ~/.photocurator/ (含已下载模型), 你的照片不受影响; 上次日志存为 ~/.photocurator/app.log.old"
 curl -fsSL "$REPO_TARBALL" | tar -xz -C "$DEST" --strip-components=1
 
 echo "==> 2/4 准备 Python (MLX 需要 ≥3.10; 缺失时会弹开发者工具安装窗口)"
@@ -115,7 +132,7 @@ else
 fi
 echo ""
 echo "以后在 启动台/应用程序 里双击 PhotoCurator Local 即可 (注意与 API 版 PhotoCurator 是两个图标)。"
-echo "  - App 日志: ~/PhotoCuratorLocal/app.log"
-echo "  - 升级版本: 重新执行本安装命令"
+echo "  - 覆盖安装: 重新执行本安装命令 = 程序全量更新; 已下载的模型与数据自动保留, 无需重新下载"
+echo "  - App 日志: ~/PhotoCuratorLocal/app.log (上次的日志: ~/.photocurator/app.log.old)"
 echo "  - 首次扫描时若询问文件夹访问权限, 点\"允许\""
 echo "  - 数据目录 ~/.photocurator 为两版共用; 请勿同时在两版中整理同一个文件夹"

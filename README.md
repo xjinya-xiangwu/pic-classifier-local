@@ -14,7 +14,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xjinya-xiangwu/pic-classifie
 
 > 若 `raw.githubusercontent.com` 打不开：浏览器打开仓库里的 `install_mac.sh` → 原始内容 → 另存为文件，终端执行 `bash ` 拖入该文件回车。
 
-安装器**只装程序本体**（下载代码到 `~/PhotoCuratorLocal` + Python 依赖 + 生成 `/Applications/PhotoCurator Local.app` 并启动，之后启动台双击即可）。**模型不随安装器分发**，见下节。若弹出「命令行开发者工具」安装窗口，点**安装**等 2-5 分钟，脚本自动继续。
+安装器为**覆盖模式**：每次运行都会自动停止旧程序 → 删除旧程序目录（`~/PhotoCuratorLocal`，含旧 venv）→ 下载全新代码重建 → 生成并启动新 App。**以下内容始终保留、无需重新下载**：已下载的模型权重（`~/.photocurator/models/`）、索引数据库、缩略图、撤销记录与清单 CSV，以及你的照片文件夹（安装器从不触碰）。上一次的运行日志会存为 `~/.photocurator/app.log.old`。更早期版本（曾与 API 版共用 `~/PhotoCurator` 目录）的残留程序也会被自动识别并清理，API 版 PhotoCurator 不受影响。若弹出「命令行开发者工具」安装窗口，点**安装**等 2-5 分钟，脚本自动继续。
 
 ## 与 API 版（PhotoCurator.app）的区别与共存
 
