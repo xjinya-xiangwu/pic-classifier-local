@@ -751,6 +751,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if cache:
             self.send_header("Cache-Control", "max-age=86400")
+        else:
+            self.send_header("Cache-Control", "no-cache")  # 页面升级后浏览器绝不复用旧缓存
         self.end_headers()
         self.wfile.write(body)
 
@@ -843,8 +845,8 @@ def open_browser(url):
 
 
 def probe_existing_port():
-    """已有 PhotoCurator 实例在运行时返回其端口, 否则 None。"""
-    for p in range(8765, 8776):
+    """已有 PhotoCurator Local 实例在运行时返回其端口, 否则 None。"""
+    for p in range(8776, 8786):  # 本地版专用端口段, 与 API 版 (8765-8775) 互不冲突
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{p}/api/state", timeout=0.5) as resp:
                 if resp.status == 200 and b"settings" in resp.read():
@@ -880,11 +882,11 @@ def main():
     old = probe_existing_port()
     if old:
         url = f"http://127.0.0.1:{old}"
-        print(f"PhotoCurator 已在运行: {url}  (直接打开页面, 不重复启动)", flush=True)
+        print(f"PhotoCurator Local 已在运行: {url}  (直接打开页面, 不重复启动)", flush=True)
         threading.Timer(0.3, lambda: open_browser(url)).start()
         return
-    port = 8765
-    for p in range(8765, 8776):
+    port = 8776
+    for p in range(8776, 8786):  # 本地版专用端口段 (API 版占 8765-8775)
         try:
             srv = ThreadingHTTPServer(("127.0.0.1", p), Handler)
             port = p
@@ -892,7 +894,7 @@ def main():
         except OSError:
             continue
     url = f"http://127.0.0.1:{port}"
-    print(f"PhotoCurator 运行中: {url}  (Ctrl+C 退出)", flush=True)
+    print(f"PhotoCurator Local (本地模型版) 运行中: {url}  (Ctrl+C 退出)", flush=True)
     print(f"数据目录: {APP_DIR}", flush=True)
     threading.Timer(0.8, lambda: open_browser(url)).start()
     try:

@@ -14,7 +14,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/xjinya-xiangwu/pic-classifie
 
 > 若 `raw.githubusercontent.com` 打不开：浏览器打开仓库里的 `install_mac.sh` → 原始内容 → 另存为文件，终端执行 `bash ` 拖入该文件回车。
 
-安装器**只装程序本体**（下载代码到 `~/PhotoCurator` + Python 依赖 + 生成 `/Applications/PhotoCurator.app` 并启动，之后启动台双击即可）。**模型不随安装器分发**，见下节。若弹出「命令行开发者工具」安装窗口，点**安装**等 2-5 分钟，脚本自动继续。
+安装器**只装程序本体**（下载代码到 `~/PhotoCuratorLocal` + Python 依赖 + 生成 `/Applications/PhotoCurator Local.app` 并启动，之后启动台双击即可）。**模型不随安装器分发**，见下节。若弹出「命令行开发者工具」安装窗口，点**安装**等 2-5 分钟，脚本自动继续。
+
+## 与 API 版（PhotoCurator.app）的区别与共存
+
+| | **PhotoCurator Local**（本仓库） | PhotoCurator（API 版） |
+| --- | --- | --- |
+| 应用图标名 | **PhotoCurator Local** | PhotoCurator |
+| 程序目录 | ~/PhotoCuratorLocal | ~/PhotoCurator |
+| 浏览器地址 | **127.0.0.1:8776**（8776-8785 专用段） | 127.0.0.1:8765 |
+| 页面标识 | 标题栏绿色 **Local** 字样 | 无 |
+
+两个版本可同时安装、同时运行、互不干扰（数据目录 `~/.photocurator/` 共用——请勿同时在两版整理同一个文件夹）。**若两个入口打开的页面长得一样，以页面标题和端口为准**：带绿色 Local / 端口 8776+ 的是本地版。曾把本地版代码装进过 ~/PhotoCurator 的用户：重跑本安装命令后以 PhotoCurator Local 为准；要恢复纯 API 版请重跑 [pic-classifier 仓库](https://github.com/xjinya-xiangwu/pic-classifier) 的安装命令。
 
 ## 模型一键下载（App 内，首次 3.1GB）
 

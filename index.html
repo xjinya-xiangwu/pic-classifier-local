@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>PhotoCurator — 服装照片整理</title>
+<title>PhotoCurator Local — 本地模型版</title>
 <style>
   * { box-sizing: border-box; margin: 0; }
   body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; background: #f5f5f7; }
@@ -69,7 +69,7 @@
 </head>
 <body>
 <header>
-  <h1>📷 PhotoCurator</h1>
+  <h1>📷 PhotoCurator <span style="color:#0a9e4a">Local</span> <span style="font-size:11px;color:#888">本地模型版 v2 · 完全离线</span></h1>
   <input type="text" id="folder" placeholder="输入照片文件夹路径, 如 /Users/you/Photos/0921">
   <label class="chk"><input type="checkbox" id="recursive"> 含子文件夹</label>
   <button class="primary" onclick="openFolder()">扫描</button>
@@ -95,8 +95,9 @@
   <button id="renameBtn" class="primary" onclick="doRename()">完成验收 → 原地重命名</button>
 </div>
 <div id="intro">
-  <h2>三步整理一批照片</h2>
-  <p>1. 上方输入照片文件夹路径 → <b>扫描</b>(支持 heic / jpg / jpeg / png)<br>
+  <h2>本地模型版 · 三步整理一批照片</h2>
+  <p style="color:#0a9e4a;font-weight:600">你正在使用 PhotoCurator Local (端口 8776+) — 识别由本机 MLX 模型完成, 照片完全不出你的 Mac。</p>
+  <p>1. 首页输入照片文件夹路径 → <b>扫描</b>(支持 heic / jpg / jpeg / png)<br>
      2. 默认<b>本地模型</b>模式: 首次在设置中下载模型(3-19GB), 之后完全离线; 也可切换为云端 API<br>
      3. <b>开始识别</b> → 逐组点击挑选保留照片 → <b>原地重命名</b>(可一键撤销)</p>
   <p style="color:#888">本地模式下照片完全不出本机; API 模式仅发送压缩图给你配置的服务。记录保存在 ~/.photocurator/。</p>
