@@ -37,9 +37,15 @@
   #intro { max-width: 560px; margin: 80px auto; background: #fff; padding: 28px; border-radius: 10px; line-height: 1.9; }
   /* 弹窗用普通 div 实现: 老款 Safari(<=15.3) 不支持 <dialog>/showModal, 会导致设置打不开 */
   .dlg { display: none; position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 50; background: rgba(0,0,0,.35); }
-  .dlg .box { position: absolute; left: 50%; top: 90px; transform: translateX(-50%); width: 440px; max-width: calc(100vw - 40px);
+  .dlg .box { position: absolute; left: 50%; top: 50px; transform: translateX(-50%); width: 480px; max-width: calc(100vw - 40px);
+              max-height: calc(100vh - 90px); overflow-y: auto;   /* 内容过高时弹窗内部滚动, 底部按钮永远可达 */
               background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,.2); }
   .dlg h3 { margin-bottom: 12px; }
+  .dlg .head { position: sticky; top: -20px; background: #fff; margin: -20px -20px 12px; padding: 14px 20px 10px;
+               display: flex; justify-content: space-between; align-items: center; z-index: 2;
+               border-bottom: 1px solid #eee; }   /* 标题+关闭钮常驻弹窗顶部, 滚动中也可见 */
+  .dlg .head button { border: none; background: none; font-size: 20px; line-height: 1; color: #888; padding: 2px 6px; }
+  .dlg .head button:hover { color: #222; }
   .dlg .row { margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
   .dlg .row label { width: 130px; font-size: 13px; color: #555; flex-shrink: 0; }
   .dlg .row input, .dlg .row select { flex: 1; }
@@ -56,7 +62,7 @@
   #modelBtn.st-idle { color: #666; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
   /* 模型切换性能对比 */
-  .cmpbox { border: 1px solid #e5e5ea; border-radius: 8px; padding: 10px 12px; margin: 2px 0 10px 138px; }
+  .cmpbox { border: 1px solid #e5e5ea; border-radius: 8px; padding: 10px 12px; margin: 2px 0 10px; overflow-x: auto; }
   .cmp { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12px; }
   .cmp th { text-align: left; color: #666; font-weight: 600; padding: 2px 4px; }
   .cmp td { padding: 3px 4px; vertical-align: middle; }
@@ -110,12 +116,12 @@
   <p style="color:#888">本地模式下照片完全不出本机; API 模式仅发送压缩图给你配置的服务。记录保存在 ~/.photocurator/。</p>
 </div>
 <div class="dlg" id="confirmDlg"><div class="box">
-  <h3>请确认</h3>
+  <div class="head"><h3>请确认</h3><button onclick="closeDlg('confirmDlg')" title="关闭">✕</button></div>
   <p id="confirmMsg"></p>
   <div style="text-align:right"><button onclick="closeDlg('confirmDlg')">取消</button> <button class="primary" onclick="closeDlg('confirmDlg','__ok')">确定</button></div>
 </div></div>
 <div class="dlg" id="settingsDlg"><div class="box">
-  <h3>设置</h3>
+  <div class="head"><h3>设置</h3><button onclick="closeDlg('settingsDlg')" title="关闭">✕</button></div>
   <div class="row"><label>运行模式</label>
     <select id="s_mode" onchange="onModeChange()">
       <option value="local">本地模型 (完全离线, 默认)</option>
@@ -129,7 +135,7 @@
         <option value="https://hf-mirror.com">国内镜像 hf-mirror (默认)</option>
         <option value="https://huggingface.co">官方 huggingface.co</option>
       </select></div>
-    <div class="row"><label></label><span style="display:flex;gap:8px">
+    <div class="row"><label></label><span style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="primary" onclick="downloadModel()">下载所选</button>
       <button onclick="deleteModel()">删除</button>
       <button id="srvBtn" onclick="toggleServer()">启动模型服务</button>
@@ -217,7 +223,9 @@ function openFolder() {
   if (!f) { toast("请先输入照片文件夹路径", true); return; }
   api("/api/open", {folder: f, recursive: $("recursive").checked}).then(poll).catch(() => {});
 }
-function startTag() { api("/api/tag", {}).then(poll).catch(() => {}); }
+function startTag() {
+  syncFormIfTouched().then(() => api("/api/tag", {})).then(poll).catch(() => {});
+}
 function stopTag() { fetch("/api/tag/stop", {method: "POST"}); }
 
 async function poll() {
@@ -488,10 +496,21 @@ async function deleteModel() {
 async function toggleServer() {
   const ph = D && D.local && D.local.server && D.local.server.phase;
   const action = (ph === "ready" || ph === "loading") ? "stop" : "start";
+  await syncFormIfTouched();  // 表单选着本地模型但保存的是 API 模式时, 先静默保存再启动 (用户反馈修复)
   await api("/api/local/server", {action}).catch(() => {});
   poll();
 }
-function openSettings() { fillSettings(); dlgOpen("settingsDlg"); scheduleApiCheck(); }
+function openSettings() { dialogTouched = true; fillSettings(); dlgOpen("settingsDlg"); scheduleApiCheck(); }
+
+// ---- 所见即所得: 设置弹窗里改过模式/模型但未保存时, 执行识别/启动服务等操作前先静默保存 ----
+let dialogTouched = false;
+async function syncFormIfTouched() {
+  if (!dialogTouched) return;
+  const s = (D && D.settings) || {};
+  if (s.mode === $("s_mode").value && s.local_model === $("s_local_model").value) return;
+  await api("/api/settings", collectSettings()).catch(() => {});
+  await poll();
+}
 
 // ---- API 连通性自动检测: 三个参数任一变化后防抖实测一次, 状态显示在表单下方 ----
 let apiCheckTimer = null, lastApiSig = "#never";
@@ -533,17 +552,20 @@ async function runApiCheck(sig) {
   $(id).addEventListener("input", scheduleApiCheck);
   $(id).addEventListener("change", scheduleApiCheck);
 });
-async function saveSettings() {
+function collectSettings() {
   const body = {mode: $("s_mode").value,
     local_model: $("s_local_model").value, hf_endpoint: $("s_hf_endpoint").value,
     base_url: $("s_base_url").value.trim(), model: $("s_model").value.trim(),
     concurrency: +$("s_concurrency").value, price_in: +$("s_price_in").value, price_out: +$("s_price_out").value,
     granularity: $("s_granularity").value, target_count: +$("s_target_count").value};
-  if ($("s_api_key").value.trim()) body.api_key = $("s_api_key").value.trim();
-  await api("/api/settings", body);
+  if ($("s_api_key").value.trim()) body.api_key = $("s_api_key").value.trim();  // 留空则不修改已保存 Key
+  return body;
+}
+async function saveSettings() {
+  await api("/api/settings", collectSettings());
   await poll();
   closeDlg("settingsDlg");
-  toast(body.mode === "local" ? "设置已保存 (本地模式)" : "设置已保存 (API 模式)");
+  toast($("s_mode").value === "local" ? "设置已保存 (本地模式)" : "设置已保存 (API 模式)");
 }
 
 async function doRename() {
