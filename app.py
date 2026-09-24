@@ -905,6 +905,12 @@ def main():
 
 if __name__ == "__main__":
     try:
+        # 工作目录固定到主目录: 升级时安装器会 rm -rf 程序目录, 若 App 的 cwd 留在被删目录,
+        # 之后 pip 等子进程会因 os.getcwd() 报 FileNotFoundError (用户实测: MLX 依赖安装失败)。
+        os.chdir(Path.home())
+    except Exception:
+        pass
+    try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass

@@ -47,9 +47,11 @@ App 下载失败的报错会显示在设置页（完整 pip 日志在 `~/.photoc
 
 **情况 A：MLX 依赖安装失败**（报错含 `pip install -r requirements-mlx.txt`）。多半是 Python 版本过旧（macOS 自带 3.9 不满足 MLX 的 ≥3.10 要求）。处理：
 1. 从 https://www.python.org/downloads/ 安装 Python 3.12+（或 `brew install python`）；
-2. 终端执行 `rm -rf ~/PhotoCurator/.venv` 删掉旧环境；
+2. 终端执行 `rm -rf ~/PhotoCuratorLocal/.venv` 删掉旧环境；
 3. 重新执行安装命令（会自动选用新版 Python 重建）。
-想看 pip 的真实报错可手动执行：`~/PhotoCurator/.venv/bin/pip install -r ~/PhotoCurator/requirements-mlx.txt`
+
+若报错含 `pip/__main__.py` 和 `FileNotFoundError`（出在 `os.getcwd()` 一行），是升级时旧进程残留、在已被删除的程序目录里运行所致，v2.0.1 起已修复（App 工作目录固定到主目录，子进程不再受程序目录删除影响）；重新执行安装命令升级后再下载即可。
+想看 pip 的真实报错可手动执行：`~/PhotoCuratorLocal/.venv/bin/pip install -r ~/PhotoCuratorLocal/requirements-mlx.txt`
 
 **情况 B：只差模型权重**。用浏览器手动下载后放入指定目录即可（App 会自动识别）：
 
@@ -92,7 +94,7 @@ App 下载失败的报错会显示在设置页（完整 pip 日志在 `~/.photoc
 
 ## 数据位置
 
-程序：`~/PhotoCurator/`；模型与数据：`~/.photocurator/`（模型 `models/`、索引与撤销记录、清单 CSV、服务日志）。源文件夹只发生**文件名变更**，不移动、不删除、不改内容。
+程序：`~/PhotoCuratorLocal/`；模型与数据：`~/.photocurator/`（模型 `models/`、索引与撤销记录、清单 CSV、服务日志）。源文件夹只发生**文件名变更**，不移动、不删除、不改内容。
 
 ## 测试
 

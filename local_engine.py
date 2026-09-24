@@ -114,7 +114,8 @@ def _ensure_mlx_deps():
     req = Path(__file__).parent / "requirements-mlx.txt"
     log_path = APP_DIR / "mlx_deps_pip.log"
     r = subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True,
+                       cwd=str(Path.home()))  # 显式cwd: 程序目录可能已被升级时的 rm -rf 删除
     log_path.write_text((r.stdout or "") + "\n--- stderr ---\n" + (r.stderr or ""), errors="ignore")
     if r.returncode != 0:
         tail = ((r.stderr or r.stdout or "").strip().splitlines() or ["(无输出)"])[-4:]

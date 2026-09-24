@@ -14,6 +14,13 @@ REPO_TARBALL="https://codeload.github.com/xjinya-xiangwu/pic-classifier-local/ta
 echo "==> 0/4 停止正在运行的旧版 Local (如有; 不影响 API 版 PhotoCurator)"
 pkill -f "$DEST/.venv/bin/python" 2>/dev/null || true
 pkill -f "$APP/Contents/MacOS/PhotoCurator" 2>/dev/null || true
+# 更早期版本的本地版与 API 版同目录同名 (~/PhotoCurator / PhotoCurator.app / 端口 8765+),
+# 上面的按路径清理够不到它; 用端口探测区分: /api/state 含 "local_model" 的才是本地版, 只杀它
+for p in 8765 8766 8767 8768 8769 8770 8771 8772 8773 8774 8775 8776 8777 8778 8779 8780 8781 8782 8783 8784 8785; do
+  if curl -fsS "http://127.0.0.1:$p/api/state" 2>/dev/null | grep -q '"local_model"'; then
+    lsof -ti tcp:$p -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
+  fi
+done
 sleep 1
 
 echo "==> 1/4 下载代码到 $DEST"
