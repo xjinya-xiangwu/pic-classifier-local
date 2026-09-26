@@ -856,9 +856,10 @@ def open_browser(url):
 
 def probe_existing_port():
     """已有 PhotoCurator Local 实例在运行时返回其端口, 否则 None。"""
+    import local_engine
     for p in range(8776, 8786):  # 本地版专用端口段, 与 API 版 (8765-8775) 互不冲突
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{p}/api/state", timeout=0.5) as resp:
+            with local_engine.loopback_opener().open(f"http://127.0.0.1:{p}/api/state", timeout=0.5) as resp:
                 if resp.status == 200 and b"settings" in resp.read():
                     return p
         except Exception:

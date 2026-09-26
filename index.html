@@ -241,6 +241,9 @@ setInterval(poll, 2000);
 function failSpan(p) {
   return p.failed ? `<span class="failLink" onclick="showErrors()">失败 ${p.failed} 张 (点看原因)</span>` : "";
 }
+function esc(s) {  // 文件名等外部输入进 innerHTML 前转义, 防特殊字符破坏卡片渲染
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
 // ---- 顶栏模型状态按钮: 一眼看出本地模型是否可用; 不可用时红色闪烁, 点击直达设置 ----
 function setModelBtn(cls, text, title) {
@@ -320,8 +323,8 @@ function render() {
   $("grid").innerHTML = g.members.map((m, i) =>
     `<div class="card ${m.selected ? "sel" : ""} ${i === 0 ? "reco" : ""}" onclick="pick(${m.id})">
       <img loading="lazy" src="/thumb/${m.hash}.jpg" onerror="this.style.background='#ccc'">
-      ${m.flags ? `<span class="badge" title="${m.flags}">${m.quality}分</span>` : `<span class="badge">${m.quality}分</span>`}
-      <div class="meta">${m.filename}</div></div>`).join("");
+      ${m.flags ? `<span class="badge" title="${esc(m.flags)}">${m.quality}分</span>` : `<span class="badge">${m.quality}分</span>`}
+      <div class="meta">${esc(m.filename)}</div></div>`).join("");
   $("stats").innerHTML = `共 ${D.groups.length} 组 ${p.tagged} 张 · 已选 ${D.groups.reduce((a, x) => a + x.members.filter(m => m.selected).length, 0)} 组` +
     (p.cost ? ` · 已用 ¥${p.cost}` : "") + (p.failed ? ` · ${failSpan(p)}` : "");
   document.title = `${curG + 1}/${D.groups.length} ${g.name} — PhotoCurator`;
@@ -472,7 +475,8 @@ function localPhaseText() {
   return t;
 }
 async function downloadModel() {
-  await api("/api/local/download", {name: $("s_local_model").value}).catch(() => {});
+  // 镜像源以表单当前值为准 (用户改了没点保存也能直接下载, 否则会静默用旧配置)
+  await api("/api/local/download", {name: $("s_local_model").value, endpoint: $("s_hf_endpoint").value.trim()}).catch(() => {});
   poll();
 }
 async function deleteModel() {

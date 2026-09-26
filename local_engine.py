@@ -57,12 +57,18 @@ def installed(name: str) -> bool:
     return (d / "config.json").exists() and any(d.glob("*.safetensors"))
 
 
+_RAM_CACHE = {"gb": None, "done": False}
+
+
 def physical_ram_gb():
+    # 结果缓存: ui_status 每 2s 被 poll 调用, macOS 上每次 spawn sysctl 子进程纯属浪费 (内存容量开机即定)
+    if _RAM_CACHE["done"]:
+        return _RAM_CACHE["gb"]
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
-            return round(int(out.stdout.strip()) / 1e9)
-        if sys.platform == "win32":
+            _RAM_CACHE["gb"] = round(int(out.stdout.strip()) / 1e9)
+        elif sys.platform == "win32":
             import ctypes
 
             class MEM(ctypes.Structure):
@@ -74,10 +80,11 @@ def physical_ram_gb():
             m = MEM()
             m.dwLength = ctypes.sizeof(MEM)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
-            return round(m.ullTotalPhys / 1e9)
+            _RAM_CACHE["gb"] = round(m.ullTotalPhys / 1e9)
     except Exception:
         pass
-    return None  # 未知内存: 预检放行, 交给用户自己判断
+    _RAM_CACHE["done"] = True
+    return _RAM_CACHE["gb"]  # 未知内存: 预检放行, 交给用户自己判断
 
 
 def recommend_model(ram_gb=None) -> str:
@@ -132,7 +139,11 @@ def _ensure_mlx_deps():
 
 def download_state() -> dict:
     with _dl_lock:
-        return dict(_dl)
+        dl = dict(_dl)
+    if dl.get("done") and time.time() - dl.get("done_at", 0) > 120:
+        dl["done"] = None  # "下载完成"提示只保留 2 分钟, 不然状态栏永远挂着旧提示
+        _dl["done"] = None
+    return dl
 
 
 def start_download(name: str, endpoint: str = ""):
@@ -177,6 +188,7 @@ def _dl_run(name: str):
         with _dl_lock:
             _dl["pct"] = 100.0
             _dl["done"] = name
+            _dl["done_at"] = time.time()
     except Exception as e:
         with _dl_lock:
             _dl["error"] = str(e)[:300]
@@ -319,25 +331,31 @@ def ensure_server(cfg: dict):
 def _watch(name: str, port: int, proc):
     deadline = time.time() + LOAD_TIMEOUT
     while time.time() < deadline:
+        with _srv_lock:
+            if _srv["phase"] == "stopped":
+                return  # 监视期间被主动停止 (换模型/手动停止): 不得覆盖 stopped 状态为失败
         if proc.poll() is not None:  # 进程提前退出
             tail = _log_tail()
             with _srv_lock:
-                _srv.update(phase="failed", error=f"服务进程退出 (code {proc.returncode}): {tail}")
+                if _srv["phase"] != "stopped":
+                    _srv.update(phase="failed", error=f"服务进程退出 (code {proc.returncode}): {tail}")
             return
         if _healthy(port):
             ok, err = _probe(port, str(model_dir(name)))
-            if ok:
-                with _srv_lock:
+            with _srv_lock:
+                if _srv["phase"] == "stopped":
+                    return
+                if ok:
                     _srv.update(phase="ready", error=None)
-            else:
-                with _srv_lock:
+                else:
                     _srv.update(phase="failed",
                                 error=f"推理服务端口已通但实测请求失败 (已停止): {err}")
-                _stop_locked(keep_status=True)
+                    _stop_locked(keep_status=True)
             return
         time.sleep(2)
     with _srv_lock:
-        _srv.update(phase="failed", error=f"模型加载超时 ({LOAD_TIMEOUT}s), 见日志 {SERVER_LOG}")
+        if _srv["phase"] != "stopped":
+            _srv.update(phase="failed", error=f"模型加载超时 ({LOAD_TIMEOUT}s), 见日志 {SERVER_LOG}")
     stop_server()
 
 

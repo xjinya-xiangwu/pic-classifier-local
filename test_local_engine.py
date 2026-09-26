@@ -228,6 +228,24 @@ le.stop_server()
 assert le.status()["phase"] == "stopped"
 print("OK F 服务幂等与停止")
 
+# --- F2. 加载中被主动停止 (换模型/手动停) 不得误报 failed (竞态回归) ---
+# 假服务只 sleep 不起 HTTP: _healthy 永远失败 → phase 停在 loading; 此时 stop_server,
+# _watch 下一轮循环必须因 phase==stopped 直接退出, 而不是把进程退出误报成 failed
+hang_srv = tmp / "hang_server.py"
+hang_srv.write_text("import time\ntime.sleep(300)\n", encoding="utf-8")
+cfg_hang = pc.save_settings({"local_server_cmd": '{python} "%s" --port {port}' % hang_srv})
+le.ensure_server(cfg_hang)
+for _ in range(20):
+    time.sleep(0.3)
+    if le.status()["phase"] == "loading":
+        break
+assert le.status()["phase"] == "loading", "假服务不响应时应停在 loading"
+le.stop_server()
+time.sleep(3)  # 给 _watch 足够轮次走到误报分支 (若无守卫会置 failed)
+st_f2 = le.status()
+assert st_f2["phase"] == "stopped" and not st_f2["error"], f"主动停止后不得误报 failed, 实得 {st_f2}"
+print("OK F2 竞态守卫: 加载中主动停止 → 保持 stopped, 无误报")
+
 # --- G. 模型切换 + 性能预估元数据 (切换前后对比功能的数据源) ---
 st = le.ui_status({"mode": "local"})
 m4 = next(m for m in st["models"] if m["name"] == "Qwen3-VL-4B-Instruct-4bit")
