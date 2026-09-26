@@ -257,7 +257,9 @@ def _post_chat(cfg: dict, messages: list) -> str:
         model_name = str(local_engine.model_dir(cfg["local_model"]))
     else:
         model_name = cfg["model"]
-    body = {"model": model_name, "temperature": 0, "max_tokens": 1024, "messages": messages}
+    body = {"model": model_name, "temperature": 0, "messages": messages}
+    if local:
+        body["max_tokens"] = 1024  # 本地模型默认输出上限不可控, 显式给足防 JSON 截断; 云端 API 用其自身默认
     timeout = 600 if local else 120  # 本地首次请求可能撞上模型加载
     last_err = None
     for attempt in range(5):
@@ -289,6 +291,7 @@ def _parse_tag(content) -> dict:
             return validate_tag(content)
         s = content if isinstance(content, str) else str(content)
         s = re.sub(r"<think>.*?</think>", "", s, flags=re.S)  # 剥离思考块, 防止其中示例 JSON 干扰切片
+        s = re.sub(r"<think>.*\Z", "", s, flags=re.S)  # 未闭合的思考块同样剥掉
         s = s[s.index("{"): s.rindex("}") + 1]
         return validate_tag(json.loads(s))
     except TagParseError:
@@ -904,6 +907,8 @@ def main():
             break
         except OSError:
             continue
+    else:
+        sys.exit("8776-8785 端口全部被占用, 无法启动 (可用活动监视器结束旧的 python 进程后重试)")
     url = f"http://127.0.0.1:{port}"
     print(f"PhotoCurator Local (本地模型版) 运行中: {url}  (Ctrl+C 退出)", flush=True)
     print(f"数据目录: {APP_DIR}", flush=True)

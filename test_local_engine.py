@@ -246,6 +246,26 @@ st_f2 = le.status()
 assert st_f2["phase"] == "stopped" and not st_f2["error"], f"主动停止后不得误报 failed, 实得 {st_f2}"
 print("OK F2 竞态守卫: 加载中主动停止 → 保持 stopped, 无误报")
 
+# --- F3. 停止后立即启动另一模型: 上一代 _watch 不得污染新服务状态 (代次令牌回归) ---
+d8 = le.model_dir("Qwen3-VL-8B-Instruct-4bit")
+d8.mkdir(parents=True)
+(d8 / "config.json").write_text("{}")
+(d8 / "model.safetensors").write_bytes(b"x")
+le.ensure_server(cfg_hang)  # A (4B, 挂死脚本): phase=loading
+for _ in range(20):
+    time.sleep(0.3)
+    if le.status()["phase"] == "loading":
+        break
+le.stop_server()  # 停 A
+cfg_b = pc.save_settings({"local_model": "Qwen3-VL-8B-Instruct-4bit"})  # B 换成 8B (评审场景: 换模型后立即识别)
+le.ensure_server(cfg_b)  # 立即启动 B; A 的 _watch 此刻可能正好醒来
+time.sleep(4.5)  # 覆盖 A 侧 _watch 的 2s 轮询周期 (无代次守卫时会把 B 误报为 failed)
+st_f3 = le.status()
+assert st_f3["phase"] == "loading" and st_f3["model"] == "Qwen3-VL-8B-Instruct-4bit" and not st_f3["error"], \
+    f"上一代监视线程不得污染新服务状态, 实得 {st_f3}"
+le.stop_server()
+print("OK F3 代次令牌: 停A立启B → B 保持 loading, 旧监视线程不误报")
+
 # --- G. 模型切换 + 性能预估元数据 (切换前后对比功能的数据源) ---
 st = le.ui_status({"mode": "local"})
 m4 = next(m for m in st["models"] if m["name"] == "Qwen3-VL-4B-Instruct-4bit")

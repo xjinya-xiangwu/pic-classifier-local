@@ -139,11 +139,9 @@ def _ensure_mlx_deps():
 
 def download_state() -> dict:
     with _dl_lock:
-        dl = dict(_dl)
-    if dl.get("done") and time.time() - dl.get("done_at", 0) > 120:
-        dl["done"] = None  # "下载完成"提示只保留 2 分钟, 不然状态栏永远挂着旧提示
-        _dl["done"] = None
-    return dl
+        if _dl.get("done") and time.time() - _dl.get("done_at", 0) > 120:
+            _dl["done"] = None  # "下载完成"提示只保留 2 分钟, 不然状态栏永远挂着旧提示
+        return dict(_dl)
 
 
 def start_download(name: str, endpoint: str = ""):
@@ -219,7 +217,7 @@ def delete_model(name: str) -> dict:
 
 # ---------------------------------------------------------------- 推理服务子进程 (PRD D2)
 _srv_lock = threading.Lock()
-_srv = {"phase": "stopped", "model": None, "port": None, "error": None}  # stopped|loading|ready|failed
+_srv = {"phase": "stopped", "model": None, "port": None, "error": None, "gen": 0}  # stopped|loading|ready|failed; gen = 服务代次, 每次真正启动 +1
 _proc = None
 
 # 环回直连: macOS 系统代理 (Clash 等) 可能劫持 127.0.0.1 请求导致全部失败, 本机通信一律绕过代理
@@ -278,20 +276,23 @@ def _probe(port: int, model_path: str) -> tuple:
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}},
                 {"type": "text", "text": "hi"}]}]}
     last = ""
-    for _ in range(2):  # 首次推理含预热, 失败重试一次
+    for attempt in range(2):  # 首次推理含预热, 失败重试一次
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions",
                                          data=json.dumps(body).encode(),
                                          headers={"Content-Type": "application/json"})
             with _LOOPBACK_OPENER.open(req, timeout=180) as resp:
                 data = json.loads(resp.read())
-            data["choices"][0]["message"]["content"]
-            return True, ""
+            content = data["choices"][0]["message"]["content"]
+            if isinstance(content, str) and content.strip():
+                return True, ""
+            last = "返回 content 为空"
         except urllib.error.HTTPError as e:
             last = f"HTTP {e.code}: {e.read().decode(errors='ignore')[:200]}"
         except Exception as e:
             last = str(e)[:200]
-        time.sleep(5)
+        if attempt == 0:
+            time.sleep(5)  # 仅重试前等待, 末次失败不再白等
     return False, last
 
 
@@ -324,26 +325,28 @@ def ensure_server(cfg: dict):
             log.close()
             raise RuntimeError(f"启动本地推理服务失败: {e}")
         log.close()  # 子进程已继承句柄, 父进程副本关闭避免长期锁住日志文件
+        _srv["gen"] += 1  # 服务代次: 让上一代 _watch 失效, 防止它把新服务的状态改写/误杀
+        gen = _srv["gen"]
         _srv.update(phase="loading", model=name, port=port, error=None)
-    threading.Thread(target=_watch, args=(name, port, _proc), daemon=True).start()
+    threading.Thread(target=_watch, args=(name, port, _proc, gen), daemon=True).start()
 
 
-def _watch(name: str, port: int, proc):
+def _watch(name: str, port: int, proc, gen: int):
     deadline = time.time() + LOAD_TIMEOUT
     while time.time() < deadline:
         with _srv_lock:
-            if _srv["phase"] == "stopped":
-                return  # 监视期间被主动停止 (换模型/手动停止): 不得覆盖 stopped 状态为失败
+            if _srv["gen"] != gen or _srv["phase"] == "stopped":
+                return  # 已被新一代服务取代, 或被主动停止: 本监视线程对当前状态无所有权, 直接退出
         if proc.poll() is not None:  # 进程提前退出
             tail = _log_tail()
             with _srv_lock:
-                if _srv["phase"] != "stopped":
+                if _srv["gen"] == gen and _srv["phase"] != "stopped":
                     _srv.update(phase="failed", error=f"服务进程退出 (code {proc.returncode}): {tail}")
             return
         if _healthy(port):
             ok, err = _probe(port, str(model_dir(name)))
             with _srv_lock:
-                if _srv["phase"] == "stopped":
+                if _srv["gen"] != gen or _srv["phase"] == "stopped":
                     return
                 if ok:
                     _srv.update(phase="ready", error=None)
@@ -354,9 +357,9 @@ def _watch(name: str, port: int, proc):
             return
         time.sleep(2)
     with _srv_lock:
-        if _srv["phase"] != "stopped":
+        if _srv["gen"] == gen and _srv["phase"] != "stopped":
             _srv.update(phase="failed", error=f"模型加载超时 ({LOAD_TIMEOUT}s), 见日志 {SERVER_LOG}")
-    stop_server()
+            _stop_locked(keep_status=True)  # 同锁内按代次校验后回收进程, 防止误杀新一代服务
 
 
 def _log_tail() -> str:
