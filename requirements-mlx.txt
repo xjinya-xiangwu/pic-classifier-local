@@ -1,3 +1,5 @@
 # 本地推理引擎依赖, 仅 macOS (Apple Silicon) 安装; Windows 不装
-# ponytail: 先不 pin 版本, L1 真机选型时用实测可用版本锁死
+# 已适配 mlx-vlm 0.7.x 新版 server (uvicorn): 模型缓存按 --model 启动路径精确匹配,
+# 识别请求必须回传完整模型路径 (app.py _post_chat), 就绪判定含真实小图探针 (local_engine._probe)。
+# ponytail: 不锁小版本; 若上游再改契约, 探针会让失败原因直接可见而不是显示"已就绪"
 mlx-vlm

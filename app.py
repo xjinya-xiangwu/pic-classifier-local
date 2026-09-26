@@ -247,18 +247,26 @@ def _chat_url(cfg: dict) -> str:
 def _post_chat(cfg: dict, messages: list) -> str:
     """一次标注请求 (含 429/超时/5xx 退避重试), 返回模型输出文本。"""
     url = _chat_url(cfg)
-    if cfg.get("mode") != "local":
+    local = cfg.get("mode") == "local"
+    if not local:
         check_public_http_url(url)
-    body = {"model": cfg["local_model"] if cfg.get("mode") == "local" else cfg["model"],
-            "temperature": 0, "messages": messages}
-    timeout = 600 if cfg.get("mode") == "local" else 120  # 本地首次请求可能撞上模型加载
+    if local:
+        # mlx-vlm 0.7.x 起模型缓存按 --model 启动路径精确匹配: 必须回传同一完整路径,
+        # 发裸名会被当成 HF 仓库名重新下载 → 每张 500 (曾致"模型已就绪但识别全失败")
+        import local_engine
+        model_name = str(local_engine.model_dir(cfg["local_model"]))
+    else:
+        model_name = cfg["model"]
+    body = {"model": model_name, "temperature": 0, "max_tokens": 1024, "messages": messages}
+    timeout = 600 if local else 120  # 本地首次请求可能撞上模型加载
     last_err = None
     for attempt in range(5):
         try:
             req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                          headers={"Authorization": "Bearer " + (cfg.get("api_key") or "local"),
                                                   "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            opener = local_engine.loopback_opener() if local else urllib.request.build_opener()
+            with opener.open(req, timeout=timeout) as resp:
                 data = json.loads(resp.read())
             usage = data.get("usage") or {}
             add_usage(cfg.get("_folder", ""), usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
@@ -279,7 +287,9 @@ def _parse_tag(content) -> dict:
     try:
         if isinstance(content, dict):  # 个别兼容服务直接把 JSON 对象放在 content 里
             return validate_tag(content)
-        s = content[content.index("{"): content.rindex("}") + 1]
+        s = content if isinstance(content, str) else str(content)
+        s = re.sub(r"<think>.*?</think>", "", s, flags=re.S)  # 剥离思考块, 防止其中示例 JSON 干扰切片
+        s = s[s.index("{"): s.rindex("}") + 1]
         return validate_tag(json.loads(s))
     except TagParseError:
         raise

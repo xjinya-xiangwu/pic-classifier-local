@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """本地引擎测试 (PRD v2 L2): 选型推荐/安装态/下载(打桩)/内存预检/子进程生命周期/本地模式识别全链路。
-用一个伪装成 mlx_vlm.server 的本地 HTTP 服务模拟推理端, 无需真机 MLX 即可验证 OpenAI 兼容链路。
+用一个按新版 mlx_vlm.server (0.7.x) 语义伪装的本地 HTTP 服务模拟推理端, 无需真机 MLX。
 运行: python test_local_engine.py
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -107,12 +108,19 @@ d.mkdir(parents=True, exist_ok=True)
 (d / "config.json").write_text("{}")
 (d / "model.safetensors").write_bytes(b"x")
 assert le.installed(name)
-# 伪装 mlx_vlm.server: 接受 --port, GET /v1/models 返回 200, POST /v1/chat/completions 返回标注 JSON
+
+# 伪装新版 mlx_vlm.server (0.7.x): 模型缓存按 --model 启动路径精确匹配,
+# 请求的 model 字段与预载路径不一致时回 500 (复现并守住"模型已就绪但识别全失败"的回归);
+# 每个请求把 model/max_tokens 记到固定文件, 供测试断言请求契约。
 fake_srv = tmp / "fake_mlx_server.py"
+record_path = tmp / "last_request.json"
 fake_srv.write_text(textwrap.dedent("""
     import json, sys
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    TAG = __TAG_TEXT__  # 与真实 mlx server 一致: content 是 JSON 字符串
+    TAG = __TAG_TEXT__
+    args = sys.argv
+    MODEL_PATH = args[args.index("--model") + 1]
+    RECORD = args[args.index("--record") + 1]
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a): pass
         def _send(self, obj, code=200):
@@ -123,22 +131,32 @@ fake_srv.write_text(textwrap.dedent("""
             self.end_headers()
             self.wfile.write(b)
         def do_GET(self):
-            self._send({"data": [{"id": "fake-vlm"}]})
+            self._send({"data": [{"id": MODEL_PATH}]})
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            with open(RECORD, "a") as f:
+                f.write(json.dumps({"model": body.get("model"), "max_tokens": body.get("max_tokens")}) + "\\n")
+            if body.get("model") != MODEL_PATH:
+                self._send({"error": {"message": "Model '%s' is not loaded. Preloaded: '%s'"
+                                      % (body.get("model"), MODEL_PATH)}}, 500)
+                return
             self._send({"choices": [{"message": {"content": TAG}}],
                         "usage": {"prompt_tokens": 640, "completion_tokens": 210}})
-    ThreadingHTTPServer(("127.0.0.1", int(sys.argv[sys.argv.index("--port") + 1])), H).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", int(args[args.index("--port") + 1])), H).serve_forever()
 """).replace("__TAG_TEXT__", json.dumps(json.dumps(TAG, ensure_ascii=False), ensure_ascii=False)), encoding="utf-8")
 cfg = pc.save_settings({"mode": "local", "local_model": name,
-                        "local_server_cmd": '{python} "{model_path}/../../fake_mlx_server.py" --port {port}'})
+                        "local_server_cmd": ('{python} "%s" --port {port} --model "{model_path}" --record "%s"'
+                                             % (fake_srv, record_path))})
 le.ensure_server(cfg)
 t0 = time.time()
-le.wait_ready(cfg, timeout=30)
-assert time.time() - t0 < 25, "就绪等待应远快于超时"
+le.wait_ready(cfg, timeout=60)
+assert time.time() - t0 < 50, "就绪等待应远快于超时"
 st = le.status()
-assert st["phase"] == "ready" and st["port"], f"服务应就绪, 实得 {st}"
-print(f"OK E1 服务子进程启动并就绪 (port {st['port']}, {time.time() - t0:.1f}s)")
+assert st["phase"] == "ready" and st["port"], f"服务应就绪 (含实测探针通过), 实得 {st}"
+probe_recs = [json.loads(x) for x in record_path.read_text().splitlines()]
+assert probe_recs and probe_recs[0]["model"] == str(d), "就绪探针必须回传预载路径作为 model 字段"
+print(f"OK E1 服务子进程启动并就绪, 实测探针通过 (port {st['port']}, {time.time() - t0:.1f}s)")
+record_path.write_text("")  # 清空, 只保留识别阶段的请求记录
 
 # 识别: 5 张图, mode=local, 服务指向伪装推理端
 folder = tmp / "photos"
@@ -156,17 +174,53 @@ for _ in range(120):
     if not pc.STATE["tag"]:
         break
 assert not pc.STATE["tag"], "识别应结束"
-errs = pc.db_all("SELECT filename, error FROM photo WHERE status='failed' LIMIT 3")
-for f, e in errs:
-    print("失败样例:", f, "->", (e or "")[:200])
 tagged = pc.db_one("SELECT COUNT(*) FROM photo WHERE status='tagged'")[0]
 assert tagged == 5, f"本地模式 5 张应全部打标成功, 实得 {tagged}"
+recs = [json.loads(x) for x in record_path.read_text().splitlines()]
+assert recs, "识别阶段应发出标注请求"
+assert all(r["model"] == str(d) for r in recs), f"识别请求 model 必须是预载路径, 实得 {recs[0]}"
+assert all(r["max_tokens"] == 1024 for r in recs), "识别请求必须显式携带 max_tokens 防截断"
 stp = pc.state_payload()
 assert stp["groups"] and len(stp["groups"]) == 1, "同标签照片应聚为一组"
 assert stp["settings"]["mode"] == "local" and stp["local"]["server"]["phase"] == "ready"
-print("OK E2 本地模式识别全链路: 5 张打标 → 1 组 (OpenAI 兼容契约, v1 分组复用)")
+print("OK E2 本地模式识别全链路: 5 张打标 → 1 组 (路径匹配 + max_tokens 契约 + v1 分组复用)")
+
+# --- E3. 就绪探针真失败路径: 指向"端口通但请求必败"的假服务 → 状态应 failed 且带原因 ---
+bad_srv = tmp / "bad_mlx_server.py"
+bad_srv.write_text(textwrap.dedent("""
+    import json, sys
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _send(self, obj, code=200):
+            b = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+        def do_GET(self):
+            self._send({"data": []})  # 健康检查通过
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self._send({"error": {"message": "Model not loaded"}}, 500)  # 实际请求必败
+    ThreadingHTTPServer(("127.0.0.1", int(sys.argv[sys.argv.index("--port") + 1])), H).serve_forever()
+"""), encoding="utf-8")
+le.stop_server()
+cfg_bad = pc.save_settings({"local_server_cmd": '{python} "%s" --port {port}' % bad_srv})
+le.ensure_server(cfg_bad)
+for _ in range(60):
+    time.sleep(0.5)
+    st_bad = le.status()
+    if st_bad["phase"] in ("failed", "ready"):
+        break
+assert st_bad["phase"] == "failed", f"端口通但请求必败的服务不得显示就绪, 实得 {st_bad}"
+assert "实测请求失败" in st_bad["error"], f"失败原因应透出, 实得 {st_bad['error']}"
+print(f"OK E3 假就绪拦截: 探针发现请求必败 → failed ({st_bad['error'][:60]}…)")
+le.stop_server()
 
 # --- F. 重复启动幂等 + 停止 ---
+le.ensure_server(cfg)
 port_before = le.status()["port"]
 le.ensure_server(cfg)
 assert le.status()["port"] == port_before, "重复启动应幂等"
@@ -195,4 +249,4 @@ print("OK G 模型切换: 设置落盘 + 停旧服务 + 未知模型拦截 + 对
 pc._conn.close()
 le.stop_server()
 shutil.rmtree(tmp, ignore_errors=True)
-print("OK 本地引擎测试全部通过 (A-F)")
+print("OK 本地引擎测试全部通过 (A-G)")

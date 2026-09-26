@@ -7,6 +7,9 @@
 - MLX 仅 macOS 可运行: Windows 开发机目录/预检逻辑可跑, 启动服务会失败 —— e2e 用 mock。
 """
 import atexit
+import base64
+import io
+import json
 import os
 import shutil
 import socket
@@ -17,6 +20,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from PIL import Image
 
 APP_DIR = Path.home() / ".photocurator"   # 与 app.py 保持一致 (避免循环导入)
 
@@ -205,6 +210,13 @@ _srv_lock = threading.Lock()
 _srv = {"phase": "stopped", "model": None, "port": None, "error": None}  # stopped|loading|ready|failed
 _proc = None
 
+# 环回直连: macOS 系统代理 (Clash 等) 可能劫持 127.0.0.1 请求导致全部失败, 本机通信一律绕过代理
+_LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def loopback_opener():
+    return _LOOPBACK_OPENER
+
 
 def status() -> dict:
     with _srv_lock:
@@ -234,14 +246,41 @@ def _free_port() -> int:
 
 
 def _healthy(port: int) -> bool:
-    # 任何 HTTP 响应 (含 404) 都证明服务已起; 连接拒绝才算未就绪
+    # 端口有响应还不够: 必须是 /v1/models 的 200 (404/500 都说明推理服务没真正可用)
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=2)
-        return True
-    except urllib.error.HTTPError:
-        return True
+        with _LOOPBACK_OPENER.open(f"http://127.0.0.1:{port}/v1/models", timeout=3) as resp:
+            return resp.status == 200
     except Exception:
         return False
+
+
+def _probe(port: int, model_path: str) -> tuple:
+    """就绪终检: 用一张 8px 小图真实走一次 chat/completions。
+    mlx-vlm 0.7.x 的模型缓存按 --model 路径精确匹配, 只看端口通不通会漏掉
+    '服务已起但每次请求都失败' 的情况 (曾导致状态显示已就绪而识别全失败)。"""
+    img = Image.new("RGB", (8, 8), (230, 230, 230))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=70)
+    body = {"model": model_path, "max_tokens": 32,
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}},
+                {"type": "text", "text": "hi"}]}]}
+    last = ""
+    for _ in range(2):  # 首次推理含预热, 失败重试一次
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions",
+                                         data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with _LOOPBACK_OPENER.open(req, timeout=180) as resp:
+                data = json.loads(resp.read())
+            data["choices"][0]["message"]["content"]
+            return True, ""
+        except urllib.error.HTTPError as e:
+            last = f"HTTP {e.code}: {e.read().decode(errors='ignore')[:200]}"
+        except Exception as e:
+            last = str(e)[:200]
+        time.sleep(5)
+    return False, last
 
 
 def ensure_server(cfg: dict):
@@ -286,8 +325,15 @@ def _watch(name: str, port: int, proc):
                 _srv.update(phase="failed", error=f"服务进程退出 (code {proc.returncode}): {tail}")
             return
         if _healthy(port):
-            with _srv_lock:
-                _srv.update(phase="ready", error=None)
+            ok, err = _probe(port, str(model_dir(name)))
+            if ok:
+                with _srv_lock:
+                    _srv.update(phase="ready", error=None)
+            else:
+                with _srv_lock:
+                    _srv.update(phase="failed",
+                                error=f"推理服务端口已通但实测请求失败 (已停止): {err}")
+                _stop_locked(keep_status=True)
             return
         time.sleep(2)
     with _srv_lock:
@@ -323,12 +369,13 @@ def stop_server():
         _stop_locked()
 
 
-def _stop_locked():
+def _stop_locked(keep_status=False):
     global _proc
     if _proc and _proc.poll() is None:
         _proc.terminate()
     _proc = None
-    _srv.update(phase="stopped", model=None, port=None, error=None)
+    if not keep_status:  # 失败路径置 failed 后仅回收进程, 不把状态覆盖回 stopped
+        _srv.update(phase="stopped", model=None, port=None, error=None)
 
 
 atexit.register(stop_server)
